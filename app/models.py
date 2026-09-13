@@ -1,6 +1,6 @@
+from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
-from datetime import datetime
 from app.database import Base
 
 class User(Base):
@@ -10,7 +10,7 @@ class User(Base):
     name = Column(String, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
     transactions = relationship("Transaction", back_populates="owner")
 
@@ -23,7 +23,8 @@ class Transaction(Base):
     amount = Column(Float, nullable=False)
     type = Column(String, nullable=False)  # "income" ou "expense"
     category = Column(String, nullable=False)
-    date = Column(DateTime, default=datetime.utcnow)
+    date = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    # user_id configurado como não nulo
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     owner = relationship("User", back_populates="transactions")

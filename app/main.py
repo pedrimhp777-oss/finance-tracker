@@ -1,19 +1,29 @@
+import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from scalar_fastapi import get_scalar_api_reference
+from dotenv import load_dotenv
 
 from app.database import engine, Base
 from app import models
 from app.routes import transactions, auth
 
+load_dotenv()
+
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Finance Tracker API", docs_url=None, redoc_url=None)
 
-# Libera o acesso para qualquer origem (necessário para o Frontend consumir a API)
+# Declaração explicita das origens para permitir envio de tokens/credenciais
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    os.getenv("FRONTEND_URL", "")
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o for o in origins if o],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

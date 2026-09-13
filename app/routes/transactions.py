@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import extract
+from sqlalchemy import extract, func
 from typing import List, Optional
 
 from app.database import get_db
@@ -28,7 +28,7 @@ def create_transaction(
     return db_transaction
 
 
-# 2. RESUMO FINANCEIRO (COM FILTRO OPCIONAL DE MÊS E ANO)
+# 2. RESUMO FINANCEIRO (AGREGAÇÃO DIRETA EM SQL COM FILTROS OPCIONAIS)
 @router.get("/summary", response_model=schemas.SummaryResponse)
 def get_summary(
     month: Optional[int] = None,
@@ -36,19 +36,21 @@ def get_summary(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(security.get_current_user)
 ):
-    query = db.query(models.Transaction).filter(models.Transaction.user_id == current_user.id)
-    
-    if month:
-        query = query.filter(extract('month', models.Transaction.date) == month)
-    if year:
-        query = query.filter(extract('year', models.Transaction.date) == year)
-        
-    transactions = query.all()
-    
-    total_income = sum(t.amount for t in transactions if t.type == "income")
-    total_expense = sum(t.amount for t in transactions if t.type == "expense")
+    def get_total_by_type(transaction_type: str) -> float:
+        query = db.query(func.coalesce(func.sum(models.Transaction.amount), 0.0)).filter(
+            models.Transaction.user_id == current_user.id,
+            models.Transaction.type == transaction_type
+        )
+        if month:
+            query = query.filter(extract('month', models.Transaction.date) == month)
+        if year:
+            query = query.filter(extract('year', models.Transaction.date) == year)
+        return float(query.scalar())
+
+    total_income = get_total_by_type("income")
+    total_expense = get_total_by_type("expense")
     balance = total_income - total_expense
-    
+
     return {
         "total_income": total_income,
         "total_expense": total_expense,
@@ -56,11 +58,13 @@ def get_summary(
     }
 
 
-# 3. LISTAR TRANSAÇÕES (COM FILTRO OPCIONAL DE MÊS E ANO)
+# 3. LISTAR TRANSAÇÕES (COM PAGINAÇÃO E FILTROS OPCIONAIS)
 @router.get("/", response_model=List[schemas.TransactionResponse])
 def list_transactions(
     month: Optional[int] = None,
     year: Optional[int] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(security.get_current_user)
 ):
@@ -71,7 +75,7 @@ def list_transactions(
     if year:
         query = query.filter(extract('year', models.Transaction.date) == year)
         
-    return query.all()
+    return query.order_by(models.Transaction.date.desc()).offset(skip).limit(limit).all()
 
 
 # 4. BUSCAR TRANSAÇÃO POR ID
