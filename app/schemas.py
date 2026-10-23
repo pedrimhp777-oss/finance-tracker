@@ -8,7 +8,7 @@ class TransactionType(str, Enum):
     EXPENSE = "expense"
 
 
-# SCHEMAS DE USU�RIO
+# SCHEMAS DE USUÁRIO
 class UserBase(BaseModel):
     email: EmailStr
     name: str
@@ -23,11 +23,11 @@ class UserResponse(UserBase):
         from_attributes = True
 
 
-# SCHEMAS DE TRANSA��O
+# SCHEMAS DE TRANSAÇÃO
 class TransactionBase(BaseModel):
     description: str = Field(min_length=1, max_length=240)
     amount: float = Field(gt=0, le=9_999_999_999.99, allow_inf_nan=False)
-    type: TransactionType  # Agora utiliza o Enum em vez de str gen�rico!
+    type: TransactionType  # Agora utiliza o Enum em vez de str genérico!
     category: str
 
 class TransactionCreate(TransactionBase):
@@ -47,3 +47,4 @@ class SummaryResponse(BaseModel):
     total_income: float
     total_expense: float
     balance: float
+
