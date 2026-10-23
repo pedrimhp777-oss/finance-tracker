@@ -80,3 +80,4 @@ async def import_sqlite_database(
             source_engine.dispose()
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
+
