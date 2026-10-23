@@ -19,21 +19,22 @@ elif DATABASE_URL.startswith("postgresql://"):
 
 engine_options = {"pool_pre_ping": True}
 if DATABASE_URL.startswith("sqlite"):
-    # SQLite fica dispon�vel para o banco em mem�ria dos testes.
+    # SQLite fica disponível para o banco em memória dos testes.
     engine_options["connect_args"] = {"check_same_thread": False}
 
 engine = create_engine(DATABASE_URL, **engine_options)
 
-# Cria a f�brica de sess�es do banco
+# Cria a fábrica de sessões do banco
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Cria a classe Base que ser� herdada pelos modelos
+# Cria a classe Base que será herdada pelos modelos
 Base = declarative_base()
 
-# Fun��o para abrir e fechar a conex�o por requisi��o
+# Função para abrir e fechar a conexão por requisição
 def get_db():
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
+
