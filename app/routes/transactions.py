@@ -8,7 +8,7 @@ from app import models, schemas, security
 
 router = APIRouter(prefix="/transactions", tags=["Transactions"])
 
-# 1. CRIAR TRANSA��O
+# 1. CRIAR TRANSAÇÃO
 @router.post("/", response_model=schemas.TransactionResponse, status_code=status.HTTP_201_CREATED)
 def create_transaction(
     transaction: schemas.TransactionCreate, 
@@ -28,7 +28,7 @@ def create_transaction(
     return db_transaction
 
 
-# 2. RESUMO FINANCEIRO (AGREGA��O DIRETA EM SQL COM FILTROS OPCIONAIS)
+# 2. RESUMO FINANCEIRO (AGREGAÇÃO DIRETA EM SQL COM FILTROS OPCIONAIS)
 @router.get("/summary", response_model=schemas.SummaryResponse)
 def get_summary(
     month: Optional[int] = Query(None, ge=1, le=12),
@@ -58,7 +58,7 @@ def get_summary(
     }
 
 
-# 3. LISTAR TRANSA��ES (COM PAGINA��O E FILTROS OPCIONAIS)
+# 3. LISTAR TRANSAÇÕES (COM PAGINAÇÃO E FILTROS OPCIONAIS)
 @router.get("/", response_model=List[schemas.TransactionResponse])
 def list_transactions(
     month: Optional[int] = Query(None, ge=1, le=12),
@@ -78,7 +78,7 @@ def list_transactions(
     return query.order_by(models.Transaction.date.desc(), models.Transaction.id.desc()).offset(skip).limit(limit).all()
 
 
-# 4. BUSCAR TRANSA��O POR ID
+# 4. BUSCAR TRANSAÇÃO POR ID
 @router.get("/{transaction_id}", response_model=schemas.TransactionResponse)
 def get_transaction(
     transaction_id: int, 
@@ -91,11 +91,11 @@ def get_transaction(
     ).first()
     
     if not db_transaction:
-        raise HTTPException(status_code=404, detail="Transa��o n�o encontrada")
+        raise HTTPException(status_code=404, detail="Transação não encontrada")
     return db_transaction
 
 
-# 5. ATUALIZAR TRANSA��O
+# 5. ATUALIZAR TRANSAÇÃO
 @router.put("/{transaction_id}", response_model=schemas.TransactionResponse)
 def update_transaction(
     transaction_id: int, 
@@ -109,7 +109,7 @@ def update_transaction(
     ).first()
     
     if not db_transaction:
-        raise HTTPException(status_code=404, detail="Transa��o n�o encontrada")
+        raise HTTPException(status_code=404, detail="Transação não encontrada")
     
     db_transaction.description = updated_data.description
     db_transaction.amount = updated_data.amount
@@ -121,7 +121,7 @@ def update_transaction(
     return db_transaction
 
 
-# 6. DELETAR TRANSA��O
+# 6. DELETAR TRANSAÇÃO
 @router.delete("/{transaction_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_transaction(
     transaction_id: int, 
@@ -134,8 +134,9 @@ def delete_transaction(
     ).first()
     
     if not db_transaction:
-        raise HTTPException(status_code=404, detail="Transa��o n�o encontrada")
+        raise HTTPException(status_code=404, detail="Transação não encontrada")
     
     db.delete(db_transaction)
     db.commit()
     return None
+
