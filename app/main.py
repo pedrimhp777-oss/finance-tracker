@@ -22,7 +22,7 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Finance Tracker API", docs_url=None, redoc_url=None)
 
-# Declara��o expl�cita das origens para permitir envio de tokens/credenciais
+# Declaração explícita das origens para permitir envio de tokens/credenciais
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -43,7 +43,7 @@ app.include_router(migration.router)
 
 @app.get("/", include_in_schema=False)
 def home():
-    return {"message": "API de Finan�as rodando com sucesso!"}
+    return {"message": "API de Finanças rodando com sucesso!"}
 
 
 @app.get("/health", include_in_schema=False)
@@ -80,9 +80,9 @@ def export_excel(
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Relat�rio Financeiro"
+    ws.title = "Relatório Financeiro"
 
-    headers = ["Descri��o", "Categoria", "Tipo", "Valor (R$)", "Data"]
+    headers = ["Descrição", "Categoria", "Tipo", "Valor (R$)", "Data"]
     ws.append(headers)
 
     header_fill = PatternFill(start_color="10B981", end_color="10B981", fill_type="solid")
@@ -98,7 +98,7 @@ def export_excel(
         ws.append([
             t.description,
             t.category,
-            "Entrada" if t.type == "income" else "Sa�da",
+            "Entrada" if t.type == "income" else "Saída",
             float(t.amount),
             t.date.strftime("%d/%m/%Y") if hasattr(t.date, 'strftime') else str(t.date)
         ])
@@ -139,3 +139,4 @@ def export_excel(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
+
