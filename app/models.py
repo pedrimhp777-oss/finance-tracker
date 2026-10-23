@@ -26,6 +26,7 @@ class Transaction(Base):
     category = Column(String, nullable=False)
     date = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     
-    # user_id configurado como n�o nulo
+    # user_id configurado como não nulo
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     owner = relationship("User", back_populates="transactions")
+
