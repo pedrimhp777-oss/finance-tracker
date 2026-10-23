@@ -14,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 from app.main import app
 from app.database import Base, get_db
 
-# Banco SQLite em mem�ria com pool est�tico para manter as tabelas durante os testes
+# Banco SQLite em memória com pool estático para manter as tabelas durante os testes
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
 
 engine = create_engine(
@@ -47,3 +47,4 @@ def client(db):
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
+
