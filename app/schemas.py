@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from datetime import datetime
 from enum import Enum
 
@@ -25,8 +25,8 @@ class UserResponse(UserBase):
 
 # SCHEMAS DE TRANSAÇÃO
 class TransactionBase(BaseModel):
-    description: str
-    amount: float
+    description: str = Field(min_length=1, max_length=240)
+    amount: float = Field(gt=0, le=9_999_999_999.99, allow_inf_nan=False)
     type: TransactionType  # Agora utiliza o Enum em vez de str genérico!
     category: str
 
@@ -47,3 +47,4 @@ class SummaryResponse(BaseModel):
     total_income: float
     total_expense: float
     balance: float
+

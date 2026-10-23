@@ -13,8 +13,9 @@ from app import models
 # 1. Carrega o arquivo .env primeiro
 load_dotenv()
 
-# 2. Configurações com valor padrão (fallback) para o pytest não quebrar
-SECRET_KEY = os.getenv("SECRET_KEY", "chave_secreta_padrao_para_testes_123456")
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY or len(SECRET_KEY) < 32:
+    raise RuntimeError("SECRET_KEY precisa ter ao menos 32 caracteres para iniciar a API.")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 
@@ -51,3 +52,4 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     if user is None:
         raise credentials_exception
     return user
+

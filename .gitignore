@@ -1,6 +1,10 @@
+.env
+.venv/
 venv/
 __pycache__/
-*.pyc
+*.py[cod]
 .pytest_cache/
-finance.db
-.env
+*.db
+*.sqlite
+*.sqlite3
+

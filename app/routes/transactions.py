@@ -31,8 +31,8 @@ def create_transaction(
 # 2. RESUMO FINANCEIRO (AGREGAÇÃO DIRETA EM SQL COM FILTROS OPCIONAIS)
 @router.get("/summary", response_model=schemas.SummaryResponse)
 def get_summary(
-    month: Optional[int] = None,
-    year: Optional[int] = None,
+    month: Optional[int] = Query(None, ge=1, le=12),
+    year: Optional[int] = Query(None, ge=1, le=9999),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(security.get_current_user)
 ):
@@ -61,8 +61,8 @@ def get_summary(
 # 3. LISTAR TRANSAÇÕES (COM PAGINAÇÃO E FILTROS OPCIONAIS)
 @router.get("/", response_model=List[schemas.TransactionResponse])
 def list_transactions(
-    month: Optional[int] = None,
-    year: Optional[int] = None,
+    month: Optional[int] = Query(None, ge=1, le=12),
+    year: Optional[int] = Query(None, ge=1, le=9999),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
@@ -75,7 +75,7 @@ def list_transactions(
     if year:
         query = query.filter(extract('year', models.Transaction.date) == year)
         
-    return query.order_by(models.Transaction.date.desc()).offset(skip).limit(limit).all()
+    return query.order_by(models.Transaction.date.desc(), models.Transaction.id.desc()).offset(skip).limit(limit).all()
 
 
 # 4. BUSCAR TRANSAÇÃO POR ID
@@ -139,3 +139,4 @@ def delete_transaction(
     db.delete(db_transaction)
     db.commit()
     return None
+
