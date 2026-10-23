@@ -1,21 +1,36 @@
+import os
+
+from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-# Cria o arquivo finance.db na raiz do projeto
-SQLALCHEMY_DATABASE_URL = "sqlite:///./finance.db"
+load_dotenv()
 
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
-)
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("DATABASE_URL precisa estar configurada para iniciar a API.")
 
-# Cria a fábrica de sessões do banco
+# Render fornece URLs postgres:// ou postgresql://; psycopg 3 usa este driver.
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
+elif DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+
+engine_options = {"pool_pre_ping": True}
+if DATABASE_URL.startswith("sqlite"):
+    # SQLite fica dispon�vel para o banco em mem�ria dos testes.
+    engine_options["connect_args"] = {"check_same_thread": False}
+
+engine = create_engine(DATABASE_URL, **engine_options)
+
+# Cria a f�brica de sess�es do banco
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Cria a classe Base que será herdada pelos modelos
+# Cria a classe Base que ser� herdada pelos modelos
 Base = declarative_base()
 
-# Função para abrir e fechar a conexão por requisição
+# Fun��o para abrir e fechar a conex�o por requisi��o
 def get_db():
     db = SessionLocal()
     try:
