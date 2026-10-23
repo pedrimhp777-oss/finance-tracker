@@ -14,7 +14,7 @@ from openpyxl.utils import get_column_letter
 from app.database import engine, Base, get_db
 from app import models
 from app.routes import transactions, auth, migration
-from app.routes.auth import get_current_user
+from app.security import get_current_user
 
 load_dotenv()
 
