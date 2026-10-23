@@ -8,7 +8,7 @@ from app import models, schemas, security
 
 router = APIRouter(prefix="/transactions", tags=["Transactions"])
 
-# 1. CRIAR TRANSAÇÃO
+# 1. CRIAR TRANSA��O
 @router.post("/", response_model=schemas.TransactionResponse, status_code=status.HTTP_201_CREATED)
 def create_transaction(
     transaction: schemas.TransactionCreate, 
@@ -28,11 +28,11 @@ def create_transaction(
     return db_transaction
 
 
-# 2. RESUMO FINANCEIRO (AGREGAÇÃO DIRETA EM SQL COM FILTROS OPCIONAIS)
+# 2. RESUMO FINANCEIRO (AGREGA��O DIRETA EM SQL COM FILTROS OPCIONAIS)
 @router.get("/summary", response_model=schemas.SummaryResponse)
 def get_summary(
-    month: Optional[int] = None,
-    year: Optional[int] = None,
+    month: Optional[int] = Query(None, ge=1, le=12),
+    year: Optional[int] = Query(None, ge=1, le=9999),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(security.get_current_user)
 ):
@@ -58,11 +58,11 @@ def get_summary(
     }
 
 
-# 3. LISTAR TRANSAÇÕES (COM PAGINAÇÃO E FILTROS OPCIONAIS)
+# 3. LISTAR TRANSA��ES (COM PAGINA��O E FILTROS OPCIONAIS)
 @router.get("/", response_model=List[schemas.TransactionResponse])
 def list_transactions(
-    month: Optional[int] = None,
-    year: Optional[int] = None,
+    month: Optional[int] = Query(None, ge=1, le=12),
+    year: Optional[int] = Query(None, ge=1, le=9999),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
     db: Session = Depends(get_db),
@@ -75,10 +75,10 @@ def list_transactions(
     if year:
         query = query.filter(extract('year', models.Transaction.date) == year)
         
-    return query.order_by(models.Transaction.date.desc()).offset(skip).limit(limit).all()
+    return query.order_by(models.Transaction.date.desc(), models.Transaction.id.desc()).offset(skip).limit(limit).all()
 
 
-# 4. BUSCAR TRANSAÇÃO POR ID
+# 4. BUSCAR TRANSA��O POR ID
 @router.get("/{transaction_id}", response_model=schemas.TransactionResponse)
 def get_transaction(
     transaction_id: int, 
@@ -91,11 +91,11 @@ def get_transaction(
     ).first()
     
     if not db_transaction:
-        raise HTTPException(status_code=404, detail="Transação não encontrada")
+        raise HTTPException(status_code=404, detail="Transa��o n�o encontrada")
     return db_transaction
 
 
-# 5. ATUALIZAR TRANSAÇÃO
+# 5. ATUALIZAR TRANSA��O
 @router.put("/{transaction_id}", response_model=schemas.TransactionResponse)
 def update_transaction(
     transaction_id: int, 
@@ -109,7 +109,7 @@ def update_transaction(
     ).first()
     
     if not db_transaction:
-        raise HTTPException(status_code=404, detail="Transação não encontrada")
+        raise HTTPException(status_code=404, detail="Transa��o n�o encontrada")
     
     db_transaction.description = updated_data.description
     db_transaction.amount = updated_data.amount
@@ -121,7 +121,7 @@ def update_transaction(
     return db_transaction
 
 
-# 6. DELETAR TRANSAÇÃO
+# 6. DELETAR TRANSA��O
 @router.delete("/{transaction_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_transaction(
     transaction_id: int, 
@@ -134,7 +134,7 @@ def delete_transaction(
     ).first()
     
     if not db_transaction:
-        raise HTTPException(status_code=404, detail="Transação não encontrada")
+        raise HTTPException(status_code=404, detail="Transa��o n�o encontrada")
     
     db.delete(db_transaction)
     db.commit()
