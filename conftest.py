@@ -2,6 +2,8 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
+os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+os.environ.setdefault("SECRET_KEY", "test-only-secret-key-never-use-in-production")
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 from app.main import app
 from app.database import Base, get_db
 
-# Banco SQLite em memória com pool estático para manter as tabelas durante os testes
+# Banco SQLite em mem�ria com pool est�tico para manter as tabelas durante os testes
 SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
 
 engine = create_engine(
