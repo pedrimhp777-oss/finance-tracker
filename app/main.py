@@ -2,7 +2,7 @@ import os
 from datetime import timezone
 from io import BytesIO
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from fastapi import FastAPI, Depends, Query
+from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from scalar_fastapi import get_scalar_api_reference
@@ -80,12 +80,11 @@ def export_excel(
     try:
         client_timezone = ZoneInfo(timezone_name)
     except (ZoneInfoNotFoundError, ValueError):
-        from fastapi import HTTPException
         raise HTTPException(status_code=422, detail="Fuso horário inválido")
 
     query = db.query(models.Transaction).filter(models.Transaction.user_id == current_user.id)
     if db.get_bind().dialect.name == "postgresql":
-        # Convert the stored instant to the browser timezone before applying month/year filters.
+        # Convert stored instants to the browser timezone before applying month/year filters.
         local_date = func.timezone(timezone_name, models.Transaction.date)
         if month is not None:
             query = query.filter(extract("month", local_date) == month)
