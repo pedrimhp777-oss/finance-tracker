@@ -22,12 +22,19 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Finance Tracker API", docs_url=None, redoc_url=None)
 
+def excel_safe_text(value: str) -> str:
+    first_visible = value.lstrip(" \t\r\n")[:1]
+    if first_visible in {"=", "+", "-", "@"} or value[:1] in {"\t", "\r", "\n"}:
+        return "'" + value
+    return value
+
+
 # Declaração explícita das origens para permitir envio de tokens/credenciais
-origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    os.getenv("FRONTEND_URL", "")
-]
+app_env = os.getenv("APP_ENV", "development").lower()
+frontend_url = os.getenv("FRONTEND_URL", "").strip().rstrip("/")
+origins = [frontend_url] if frontend_url else []
+if app_env in {"development", "dev", "local"}:
+    origins.extend(["http://localhost:5173", "http://127.0.0.1:5173"])
 
 app.add_middleware(
     CORSMiddleware,
@@ -96,8 +103,8 @@ def export_excel(
 
     for t in user_transactions:
         ws.append([
-            t.description,
-            t.category,
+            excel_safe_text(t.description),
+            excel_safe_text(t.category),
             "Entrada" if t.type == "income" else "Saída",
             float(t.amount),
             t.date.strftime("%d/%m/%Y") if hasattr(t.date, 'strftime') else str(t.date)
