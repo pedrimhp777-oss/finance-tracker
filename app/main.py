@@ -13,7 +13,7 @@ from openpyxl.utils import get_column_letter
 
 from app.database import engine, Base, get_db
 from app import models
-from app.routes import transactions, auth, migration
+from app.routes import transactions, auth
 from app.security import get_current_user
 
 load_dotenv()
@@ -39,7 +39,7 @@ app.add_middleware(
 
 app.include_router(auth.router)
 app.include_router(transactions.router)
-app.include_router(migration.router)
+
 
 @app.get("/", include_in_schema=False)
 def home():
