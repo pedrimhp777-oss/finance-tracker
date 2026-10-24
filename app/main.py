@@ -1,11 +1,13 @@
 import os
+from datetime import timezone
 from io import BytesIO
-from fastapi import FastAPI, Depends, Query
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from scalar_fastapi import get_scalar_api_reference
 from dotenv import load_dotenv
-from sqlalchemy import extract, text
+from sqlalchemy import extract, func, text
 from sqlalchemy.orm import Session
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -71,19 +73,36 @@ def export_excel(
     year: int | None = Query(None, ge=1, le=9999),
     category: str | None = Query(None, min_length=1, max_length=100),
     search: str | None = Query(None, max_length=240),
+    timezone_name: str = Query("UTC", max_length=64),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
+    try:
+        client_timezone = ZoneInfo(timezone_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise HTTPException(status_code=422, detail="Fuso horário inválido")
+
     query = db.query(models.Transaction).filter(models.Transaction.user_id == current_user.id)
-    if month is not None:
-        query = query.filter(extract("month", models.Transaction.date) == month)
-    if year is not None:
-        query = query.filter(extract("year", models.Transaction.date) == year)
+    if db.get_bind().dialect.name == "postgresql":
+        # Convert stored instants to the browser timezone before applying month/year filters.
+        local_date = func.timezone(timezone_name, models.Transaction.date)
+        if month is not None:
+            query = query.filter(extract("month", local_date) == month)
+        if year is not None:
+            query = query.filter(extract("year", local_date) == year)
     if category:
         query = query.filter(models.Transaction.category == category)
     if search:
         query = query.filter(models.Transaction.description.ilike(f"%{search.strip()}%"))
     user_transactions = query.order_by(models.Transaction.date.desc()).all()
+    if db.get_bind().dialect.name != "postgresql" and (month is not None or year is not None):
+        def in_selected_period(transaction):
+            value = transaction.date
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            local_value = value.astimezone(client_timezone)
+            return (month is None or local_value.month == month) and (year is None or local_value.year == year)
+        user_transactions = [transaction for transaction in user_transactions if in_selected_period(transaction)]
 
     wb = Workbook()
     ws = wb.active
@@ -102,12 +121,17 @@ def export_excel(
         cell.alignment = center_align
 
     for t in user_transactions:
+        transaction_date = t.date
+        if hasattr(transaction_date, "astimezone"):
+            if transaction_date.tzinfo is None:
+                transaction_date = transaction_date.replace(tzinfo=timezone.utc)
+            transaction_date = transaction_date.astimezone(client_timezone)
         ws.append([
             excel_safe_text(t.description),
             excel_safe_text(t.category),
             "Entrada" if t.type == "income" else "Saída",
             float(t.amount),
-            t.date.strftime("%d/%m/%Y") if hasattr(t.date, 'strftime') else str(t.date)
+            transaction_date.strftime("%d/%m/%Y") if hasattr(transaction_date, 'strftime') else str(transaction_date)
         ])
 
     currency_format = 'R$ #,##0.00'
