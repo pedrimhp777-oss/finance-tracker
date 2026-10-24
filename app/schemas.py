@@ -77,6 +77,8 @@ class TransactionCreate(TransactionBase):
 
 
 class TransactionResponse(TransactionBase):
+    # Return JSON numbers for clients doing arithmetic with amounts.
+    amount: float
     id: int
     date: datetime
     user_id: int
