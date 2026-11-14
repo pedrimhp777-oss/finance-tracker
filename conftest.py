@@ -2,7 +2,11 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+
+# Segurança dos testes: o ambiente de teste SEMPRE usa SQLite em memória.
+# Sobrescrevemos (e nunca apenas "setdefault") para garantir que nenhum teste
+# acesse o banco configurado no ambiente (produção/Neon).
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ.setdefault("SECRET_KEY", "test-only-secret-key-never-use-in-production")
 
 import pytest

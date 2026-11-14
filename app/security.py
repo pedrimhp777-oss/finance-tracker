@@ -1,4 +1,7 @@
 import os
+import threading
+import time
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
@@ -21,6 +24,49 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
+
+
+# --- Rate limiting simples em memória para rotas de autenticação ---
+# Suficiente para uma instância única (Render free/single). Se a aplicação
+# escalar horizontalmente, migrar para um limitador externo (ex.: Redis).
+_MAX_ATTEMPTS = 10
+_WINDOW_SECONDS = 300
+_attempts_lock = threading.Lock()
+_attempts: dict[str, deque[float]] = defaultdict(deque)
+
+
+class RateLimitExceeded(Exception):
+    """Sinaliza excesso de tentativas para uma chave."""
+
+
+def register_auth_attempt(key: str, success: bool) -> None:
+    """Registra uma tentativa; falhas consecutivas elevam o contador.
+
+    Sucessos limpam o histórico da chave para não bloquear usuários legítimos.
+    """
+    now = time.monotonic()
+    with _attempts_lock:
+        window = _attempts[key]
+        if success:
+            window.clear()
+            return
+        window.append(now)
+        while window and now - window[0] > _WINDOW_SECONDS:
+            window.popleft()
+        if len(window) > _MAX_ATTEMPTS:
+            raise RateLimitExceeded()
+
+
+def check_auth_rate_limit(key: str) -> None:
+    """Lança RateLimitExceeded se a chave já excedeu o limite."""
+    now = time.monotonic()
+    with _attempts_lock:
+        window = _attempts[key]
+        while window and now - window[0] > _WINDOW_SECONDS:
+            window.popleft()
+        if len(window) > _MAX_ATTEMPTS:
+            raise RateLimitExceeded()
+
 
 
 def hash_password(password: str) -> str:
