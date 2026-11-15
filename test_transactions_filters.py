@@ -464,6 +464,65 @@ def test_summary_combined_category_search_period(client):
     assert float(res_feb.json()["total_expense"]) == 70.00
 
 
+# --- FILTRO POR DIA (exige mes + ano) ---
+
+def test_day_filter_without_month_year_rejected(client):
+    headers = get_auth_headers(client, "dayreq@email.com")
+    _create(client, headers)
+    res = client.get("/transactions/", params={"day": 15}, headers=headers)
+    assert res.status_code == 422
+    assert "mês e o ano" in res.json()["detail"]
+
+    res_sum = client.get("/transactions/summary", params={"day": 15}, headers=headers)
+    assert res_sum.status_code == 422
+
+
+def test_day_filter_matches_only_that_day(client):
+    headers = get_auth_headers(client, "dayfilter@email.com")
+    _create(client, headers, description="Dia 15", amount="100.00")
+    _create(client, headers, description="Dia diferente", amount="50.00")
+
+    from conftest import engine
+    from sqlalchemy.orm import sessionmaker
+    from app import models
+
+    listing = client.get("/transactions/", headers=headers).json()
+    by_desc = {row["description"]: row["id"] for row in listing}
+    s = sessionmaker(bind=engine)()
+    s.get(models.Transaction, by_desc["Dia 15"]).date = datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc)
+    s.get(models.Transaction, by_desc["Dia diferente"]).date = datetime(2026, 3, 20, 12, 0, tzinfo=timezone.utc)
+    s.commit()
+    s.close()
+
+    params = {"month": 3, "year": 2026, "day": 15}
+    lst = client.get("/transactions/", params=params, headers=headers).json()
+    assert [t["description"] for t in lst] == ["Dia 15"]
+
+    summ = client.get("/transactions/summary", params=params, headers=headers).json()
+    assert float(summ["total_expense"]) == 100.00
+
+    cats = client.get("/transactions/categories", params=params, headers=headers).json()
+    assert len(cats) == 1 and cats[0]["total"] == 100.00
+
+
+def test_day_filter_day_without_data_returns_empty(client):
+    headers = get_auth_headers(client, "dayempty@email.com")
+    _create(client, headers)
+    listing = client.get("/transactions/", headers=headers).json()
+    from conftest import engine
+    from sqlalchemy.orm import sessionmaker
+    from app import models
+    s = sessionmaker(bind=engine)()
+    s.get(models.Transaction, listing[0]["id"]).date = datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc)
+    s.commit()
+    s.close()
+
+    lst = client.get(
+        "/transactions/", params={"month": 3, "year": 2026, "day": 29}, headers=headers
+    ).json()
+    assert lst == []
+
+
 def test_categories_requires_auth(client):
     res = client.get("/transactions/categories")
     assert res.status_code == 401
