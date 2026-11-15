@@ -98,8 +98,26 @@ def login(
             detail="Muitas tentativas. Tente novamente em alguns minutos.",
         ) from exc
 
-    access_token = security.create_access_token(data={"sub": str(user.id)})
+    access_token = security.create_access_token(
+        data={"sub": str(user.id), "tv": user.token_version or 0}
+    )
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(security.get_current_user),
+):
+    """Revoga as sessões do usuário no servidor.
+
+    Incrementa `token_version`, invalidando qualquer token emitido antes
+    deste instante — inclusive cópias obtidas por terceiros. Funciona com
+    múltiplas instâncias e sobrevive a reinícios, pois o estado vive no banco.
+    """
+    current_user.token_version = (current_user.token_version or 0) + 1
+    db.commit()
+    return None
 
 
 @router.get("/me", response_model=schemas.UserResponse)

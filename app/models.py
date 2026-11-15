@@ -10,6 +10,12 @@ class User(Base):
     name = Column(String, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
+    # Contador de gerações de sessão. Incrementado no logout (e em futuras
+    # trocas de senha): qualquer token emitido com valor anterior passa a ser
+    # rejeitado em get_current_user, mesmo dentro da validade do `exp`.
+    token_version = Column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
     transactions = relationship("Transaction", back_populates="owner")

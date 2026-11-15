@@ -179,9 +179,15 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def create_access_token(data: dict) -> str:
+    """Emite um JWT levando junto a versão de sessão do usuário (`tv`).
+
+    O `tv` é confrontado com `users.token_version` em `get_current_user`.
+    Incrementar o contador no banco invalida todos os tokens anteriores.
+    """
     to_encode: dict[str, Any] = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
+    to_encode.setdefault("tv", 0)
     # PyJWT serializa `exp` (datetime) como timestamp e exige `sub` string.
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -203,4 +209,14 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
     if user is None:
         raise credentials_exception
+
+    # Revogação de sessão: tokens emitidos antes do último logout (ou troca de
+    # senha) carregam um `tv` menor e são recusados. Tokens legados, sem `tv`,
+    # valem como 0 — seguem válidos até o usuário fazer logout.
+    token_version = payload.get("tv", 0)
+    if not isinstance(token_version, int) or isinstance(token_version, bool):
+        raise credentials_exception
+    if token_version != (user.token_version or 0):
+        raise credentials_exception
+
     return user
