@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app import config
 from app.database import get_db
 from app.middleware import NO_STORE_HEADER, NoStoreMiddleware, is_sensitive_path
 from app.routes import transactions, auth
@@ -19,11 +20,11 @@ load_dotenv()
 # versões anteriores (via create_all): `alembic stamp head` + migrações
 # incrementais (ex.: 0002 para os índices de desempenho).
 
-app_env = os.getenv("APP_ENV", "development").lower()
+app_env = config.APP_ENV
 # Ambientes de desenvolvimento/teste expõem o schema OpenAPI; produção não.
-# A ausência explícita de APP_ENV cai em "development", então deployments
-# reais devem definir APP_ENV=production para fechar /docs e /openapi.json.
-is_dev_env = app_env in {"development", "dev", "local", "test"}
+# A ausência de APP_ENV cai em "development", então deployments reais devem
+# definir APP_ENV=production para fechar /docs e /openapi.json.
+is_dev_env = config.IS_DEV_ENV
 
 app = FastAPI(
     title="Finance Tracker API",

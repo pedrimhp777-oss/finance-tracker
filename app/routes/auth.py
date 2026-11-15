@@ -1,9 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+import secrets
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app import models, schemas, security
+from app import config, models, schemas, security
 from app.database import get_db
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
@@ -76,6 +78,7 @@ def register_user(
 @router.post("/login")
 def login(
     request: Request,
+    response: Response,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
 ):
@@ -98,8 +101,69 @@ def login(
             detail="Muitas tentativas. Tente novamente em alguns minutos.",
         ) from exc
 
-    access_token = security.create_access_token(data={"sub": str(user.id)})
+    access_token = security.create_access_token(
+        data={"sub": str(user.id), "tv": user.token_version or 0}
+    )
+
+    # Sessão em cookie HttpOnly (não legível por JS, imune a roubo via XSS).
+    _set_session_cookies(response, access_token)
+
+    # O token continua no corpo durante a transição: clientes que ainda usam
+    # `Authorization: Bearer` seguem funcionando sem alteração.
     return {"access_token": access_token, "token_type": "bearer"}
+
+
+def _set_session_cookies(response: Response, access_token: str) -> None:
+    """Emite o cookie de sessão (HttpOnly) e o token CSRF (legível por JS)."""
+    max_age = security.ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    response.set_cookie(
+        key=config.AUTH_COOKIE_NAME,
+        value=access_token,
+        max_age=max_age,
+        httponly=True,
+        secure=config.COOKIE_SECURE,
+        samesite=config.COOKIE_SAMESITE,
+        path="/",
+    )
+    response.set_cookie(
+        key=config.CSRF_COOKIE_NAME,
+        value=secrets.token_urlsafe(32),
+        max_age=max_age,
+        httponly=False,  # o frontend precisa ler para ecoar no header
+        secure=config.COOKIE_SECURE,
+        samesite=config.COOKIE_SAMESITE,
+        path="/",
+    )
+
+
+def _clear_session_cookies(response: Response) -> None:
+    """Remove os cookies de sessão e CSRF."""
+    for name in (config.AUTH_COOKIE_NAME, config.CSRF_COOKIE_NAME):
+        response.delete_cookie(
+            key=name,
+            path="/",
+            secure=config.COOKIE_SECURE,
+            samesite=config.COOKIE_SAMESITE,
+        )
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(
+    response: Response,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(security.get_current_user),
+):
+    """Revoga as sessões do usuário no servidor.
+
+    Incrementa `token_version`, invalidando qualquer token emitido antes
+    deste instante — inclusive cópias obtidas por terceiros. Funciona com
+    múltiplas instâncias e sobrevive a reinícios, pois o estado vive no banco.
+    Os cookies de sessão e CSRF também são apagados.
+    """
+    current_user.token_version = (current_user.token_version or 0) + 1
+    db.commit()
+    _clear_session_cookies(response)
+    return None
 
 
 @router.get("/me", response_model=schemas.UserResponse)
