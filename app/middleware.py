@@ -86,3 +86,40 @@ class NoStoreMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_no_store)
+
+
+# --- Headers estáticos de segurança -----------------------------------------
+# Aplicados a TODA resposta da API, inclusive erros 401/404/422 e o preflight.
+# -----------------------------------------------------------------------------
+NOSNIFF_HEADER = "nosniff"
+
+
+class SecurityHeadersMiddleware:
+    """Adiciona `X-Content-Type-Options: nosniff` a todas as respostas.
+
+    Por que isso importa numa API JSON: sem `nosniff`, navegadores antigos
+    podem "adivinhar" o tipo de um corpo e interpretar como HTML/script algo
+    que foi servido como `application/json`. O header força o navegador a
+    respeitar o `Content-Type` declarado.
+
+    Implementado em ASGI puro pelo mesmo motivo do `NoStoreMiddleware`: não
+    bufferiza o corpo, então a exportação Excel (`StreamingResponse`) continua
+    íntegra.
+    """
+
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_nosniff(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                MutableHeaders(scope=message)[
+                    "X-Content-Type-Options"
+                ] = NOSNIFF_HEADER
+            await send(message)
+
+        await self.app(scope, receive, send_with_nosniff)

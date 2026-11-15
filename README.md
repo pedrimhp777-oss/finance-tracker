@@ -104,11 +104,67 @@ de desempenho estão em `migrations/versions/0002_indexes.py`.
 | POST | `/auth/register` | Cadastro (201; e-mail duplicado → 409) |
 | POST | `/auth/login` | Login (OAuth2 form; retorna JWT) |
 | GET | `/auth/me` | Dados do usuário autenticado |
+| POST | `/auth/logout` | Encerra a sessão revogando **todos** os tokens do usuário |
 | POST | `/transactions/` | Criar transação |
 | GET | `/transactions/` | Listar com filtros (`month`, `year`, `category`, `search`, `timezone_name`, `skip`, `limit`) |
 | GET | `/transactions/summary` | Resumo financeiro agregado |
 | GET | `/transactions/export/excel` | Exportação Excel com os mesmos filtros |
 | PUT/DELETE | `/transactions/{id}` | Atualizar / excluir |
+
+## Autenticação — estado atual e limites
+
+### Modo ativo: `Authorization: Bearer`
+
+O frontend guarda o JWT no `localStorage` e o envia no header `Authorization`.
+Requisições com esse header **não passam por verificação de CSRF**, porque um
+site terceiro não consegue definir esse header em formulários ou navegações.
+
+**Risco conhecido e aceito:** em caso de XSS, um script poderia ler o token.
+As mitigações aplicadas são a ausência de vetores de injeção no frontend
+(nenhum `dangerouslySetInnerHTML`/`innerHTML`/`eval`), React escapando texto
+por padrão e a CSP configurada no deploy do frontend.
+
+### Modo alternativo: cookie `HttpOnly` (opt-in, **inativo** hoje)
+
+O backend também aceita sessão por cookie: no login ele emite
+`access_token` (`HttpOnly`, não legível por JS) e `csrf_token` (legível, para
+*o double-submit*). A troca de estado exige o header `X-CSRF-Token` igual ao
+cookie. O header `Authorization` tem **precedência** sobre o cookie.
+
+Esse modo está implementado e testado, mas **não é usado pelo frontend**:
+
+1. o Axios não envia credenciais em requisições cross-origin
+   (`withCredentials` desligado) — por isso o navegador nem inclui os cookies;
+2. API e frontend vivem em domínios registráveis diferentes
+   (`*.onrender.com` e `*.vercel.app`), o que torna o cookie de terceira
+   parte — e Safari/Firefox já bloqueiam esse tipo por padrão.
+
+**Pré-requisitos para migrar** (no dia em que houver um domínio próprio):
+
+- servir API e frontend sob o mesmo domínio registrável (ex.: `app.` e `api.`);
+- definir `Domain` no cookie de CSRF **ou** expor um `GET /auth/csrf`,
+  senão o JavaScript do frontend não consegue ler o token para ecoá-lo;
+- ligar `withCredentials` no cliente HTTP.
+
+### Logout revoga todas as sessões
+
+O `token_version` é **por usuário**, não por dispositivo. Um `POST /auth/logout`
+(inclusive o disparado pelo botão "Sair") invalida **todos** os tokens daquela
+conta — os outros dispositivos precisam autenticar novamente. É intencional
+(um logout serve como "sair de tudo" em caso de suspeita), mas vale saber ao
+usar várias abas ou aparelhos.
+
+O frontend dispara o logout em modo *best-effort*: se a requisição não chegar
+ao servidor, a revogação não acontece e o token continua válido até expirar
+(TTL padrão: 30 minutos).
+
+### Headers de resposta
+
+| Header | Onde | Objetivo |
+|---|---|---|
+| `Cache-Control: no-store` | `/transactions*`, `/auth/login`, `/auth/register`, `/auth/me`, `/auth/logout` | impedir cache de dados financeiros/pessoais e de tokens |
+| `X-Content-Type-Options: nosniff` | toda resposta | impedir que o navegador "adivinhe" o tipo do corpo |
+| `Access-Control-Allow-Origin` | respostas com `Origin` permitida, inclusive **erros 500** | o `ServerErrorMiddleware` responde fora da pilha; sem isso o navegador bloquearia o erro |
 
 ## Deploy
 

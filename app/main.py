@@ -10,7 +10,13 @@ from sqlalchemy.orm import Session
 
 from app import config
 from app.database import get_db
-from app.middleware import NO_STORE_HEADER, NoStoreMiddleware, is_sensitive_path
+from app.middleware import (
+    NOSNIFF_HEADER,
+    NO_STORE_HEADER,
+    NoStoreMiddleware,
+    SecurityHeadersMiddleware,
+    is_sensitive_path,
+)
 from app.routes import transactions, auth
 
 load_dotenv()
@@ -52,6 +58,10 @@ app.add_middleware(
 # final inclui os headers de CORS já calculados e o Cache-Control é aplicado
 # por último, sem interferir no preflight.
 app.add_middleware(NoStoreMiddleware)
+
+# `nosniff` vale para toda resposta, inclusive as que o NoStoreMiddleware não
+# cobre (health, raiz, preflight). Fica por fora para alcançar tudo.
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.include_router(auth.router)
 app.include_router(transactions.router)
@@ -104,6 +114,9 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
     if is_sensitive_path(request.url.path):
         response.headers["Cache-Control"] = NO_STORE_HEADER
+    # O 500 é gerado fora da pilha de middlewares, então `nosniff` também
+    # precisa ser aplicado aqui.
+    response.headers["X-Content-Type-Options"] = NOSNIFF_HEADER
     apply_cors_headers(request, response)
     return response
 
