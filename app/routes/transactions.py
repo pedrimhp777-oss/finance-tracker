@@ -1,4 +1,5 @@
 from typing import List, Optional
+from datetime import timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -28,13 +29,22 @@ def create_transaction(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
-    db_transaction = models.Transaction(
-        description=transaction.description,
-        amount=transaction.amount,
-        type=transaction.type,
-        category=transaction.category,
-        user_id=current_user.id,
-    )
+    values = {
+        "description": transaction.description,
+        "amount": transaction.amount,
+        "type": transaction.type,
+        "category": transaction.category,
+        "user_id": current_user.id,
+    }
+    if transaction.date is not None:
+        # Normaliza datas ingênuas (sem fuso) para UTC, pois a coluna é
+        # timestamptz.
+        values["date"] = (
+            transaction.date.replace(tzinfo=timezone.utc)
+            if transaction.date.tzinfo is None
+            else transaction.date
+        )
+    db_transaction = models.Transaction(**values)
     db.add(db_transaction)
     db.commit()
     db.refresh(db_transaction)
@@ -157,6 +167,12 @@ def update_transaction(
     db_transaction.amount = updated_data.amount
     db_transaction.type = updated_data.type
     db_transaction.category = updated_data.category
+    if updated_data.date is not None:
+        db_transaction.date = (
+            updated_data.date.replace(tzinfo=timezone.utc)
+            if updated_data.date.tzinfo is None
+            else updated_data.date
+        )
 
     db.commit()
     db.refresh(db_transaction)

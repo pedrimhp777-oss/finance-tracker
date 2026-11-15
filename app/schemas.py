@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
 
@@ -73,7 +73,22 @@ class TransactionBase(BaseModel):
 
 
 class TransactionCreate(TransactionBase):
-    pass
+    """Payload de criação/edição. `date` é opcional: quando omitido, a
+    transação recebe a data/hora atual; quando informado, permite registrar
+    uma transação de um dia passado (ex.: salário de um mês anterior).
+    """
+    date: datetime | None = None
+
+    @field_validator("date")
+    @classmethod
+    def reject_future_date(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return value
+        aware = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        # Tolerância de 1 dia: acomoda fuso horário do cliente (UTC+13).
+        if aware > datetime.now(timezone.utc) + timedelta(days=1):
+            raise ValueError("A data da transação não pode estar no futuro.")
+        return value
 
 
 class TransactionResponse(TransactionBase):

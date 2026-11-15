@@ -1,5 +1,6 @@
 """Testes de filtros, paginação, fuso horário, exportação Excel e precisão."""
 import io
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import func
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -244,6 +245,98 @@ def test_update_transaction_success(client):
     # Persistência real da edição.
     fetched = client.get(f"/transactions/{t_id}", headers=headers)
     assert fetched.json()["description"] == "Editada"
+
+
+# --- DATA OPCIONAL NA CRIACAO/EDICAO ---
+
+def test_create_transaction_with_custom_past_date(client):
+    headers = get_auth_headers(client, "datepast@email.com")
+    res = client.post(
+        "/transactions/",
+        json={
+            "description": "Salario de marco",
+            "amount": "3000",
+            "type": "income",
+            "category": "Trabalho",
+            "date": "2026-03-15T12:00:00Z",
+        },
+        headers=headers,
+    )
+    assert res.status_code == 201
+    body = res.json()
+    assert body["date"].startswith("2026-03-15T")
+
+    # Aparece no resumo do mes correspondente.
+    summary = client.get(
+        "/transactions/summary",
+        params={"year": 2026, "month": 3},
+        headers=headers,
+    ).json()
+    assert float(summary["total_income"]) == 3000.00
+
+
+def test_create_transaction_without_date_uses_now(client):
+    headers = get_auth_headers(client, "datenow@email.com")
+    before = datetime.now(timezone.utc).replace(microsecond=0)
+    res = _create(client, headers)
+    assert res.status_code == 201
+    got = datetime.fromisoformat(res.json()["date"].replace("Z", "+00:00"))
+    # SQLite persiste sem fuso (o banco de teste é naive); trata como UTC.
+    if got.tzinfo is None:
+        got = got.replace(tzinfo=timezone.utc)
+    after = datetime.now(timezone.utc)
+    assert before - timedelta(seconds=5) <= got <= after + timedelta(seconds=5)
+
+
+def test_create_transaction_future_date_rejected(client):
+    headers = get_auth_headers(client, "datefuture@email.com")
+    res = client.post(
+        "/transactions/",
+        json={
+            "description": "Do futuro",
+            "amount": "10",
+            "type": "expense",
+            "category": "Outros",
+            "date": (datetime.now(timezone.utc) + timedelta(days=10)).isoformat(),
+        },
+        headers=headers,
+    )
+    assert res.status_code == 422
+
+
+def test_update_transaction_changes_date(client):
+    headers = get_auth_headers(client, "dateedit@email.com")
+    created = _create(client, headers).json()
+    res = client.put(
+        f"/transactions/{created['id']}",
+        json={
+            "description": created["description"],
+            "amount": created["amount"],
+            "type": created["type"],
+            "category": created["category"],
+            "date": "2026-01-05T12:00:00Z",
+        },
+        headers=headers,
+    )
+    assert res.status_code == 200
+    assert res.json()["date"].startswith("2026-01-05T")
+
+
+def test_update_transaction_without_date_keeps_original(client):
+    headers = get_auth_headers(client, "datekeep@email.com")
+    created = _create(client, headers).json()
+    res = client.put(
+        f"/transactions/{created['id']}",
+        json={
+            "description": "Descricao nova",
+            "amount": created["amount"],
+            "type": created["type"],
+            "category": created["category"],
+        },
+        headers=headers,
+    )
+    assert res.status_code == 200
+    assert res.json()["date"] == created["date"]
 
 
 def test_update_other_users_transaction_rejected(client):
