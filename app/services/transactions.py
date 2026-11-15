@@ -34,6 +34,7 @@ def _in_selected_period(
     client_timezone: ZoneInfo,
     month: int | None,
     year: int | None,
+    day: int | None = None,
 ) -> bool:
     value = transaction.date
     if value.tzinfo is None:
@@ -42,6 +43,7 @@ def _in_selected_period(
     return (
         (month is None or local_value.month == month)
         and (year is None or local_value.year == year)
+        and (day is None or local_value.day == day)
     )
 
 
@@ -61,13 +63,22 @@ def _base_query(
     return query
 
 
-def _period_in_sql(db: Session, query: Query, month: int | None, year: int | None, timezone_name: str | None) -> Query:
-    """Aplica filtros de mês/ano no SQL (PostgreSQL), convertendo o fuso."""
+def _period_in_sql(
+    db: Session,
+    query: Query,
+    month: int | None,
+    year: int | None,
+    timezone_name: str | None,
+    day: int | None = None,
+) -> Query:
+    """Aplica filtros de mês/ano/dia no SQL (PostgreSQL), convertendo o fuso."""
     local_date = func.timezone(timezone_name or "UTC", models.Transaction.date)
     if month is not None:
         query = query.filter(extract("month", local_date) == month)
     if year is not None:
         query = query.filter(extract("year", local_date) == year)
+    if day is not None:
+        query = query.filter(extract("day", local_date) == day)
     return query
 
 
@@ -81,6 +92,7 @@ def filtered_transactions(
     timezone_name: str | None = None,
     skip: int = 0,
     limit: int | None = None,
+    day: int | None = None,
 ) -> list[models.Transaction]:
     """Busca transações do usuário com filtros opcionais.
 
@@ -93,11 +105,11 @@ def filtered_transactions(
         models.Transaction.date.desc(), models.Transaction.id.desc()
     )
 
-    has_period_filter = month is not None or year is not None
+    has_period_filter = month is not None or year is not None or day is not None
 
     if db.get_bind().dialect.name == "postgresql":
         if has_period_filter:
-            query = _period_in_sql(db, query, month, year, timezone_name)
+            query = _period_in_sql(db, query, month, year, timezone_name, day)
         if skip:
             query = query.offset(skip)
         if limit is not None:
@@ -107,7 +119,10 @@ def filtered_transactions(
     rows = query.all()
     if has_period_filter:
         client_timezone = resolve_timezone(timezone_name)
-        rows = [t for t in rows if _in_selected_period(t, client_timezone, month, year)]
+        rows = [
+            t for t in rows
+            if _in_selected_period(t, client_timezone, month, year, day)
+        ]
     if limit is None:
         return rows[skip:]
     return rows[skip : skip + limit]
@@ -121,6 +136,7 @@ def expenses_by_category(
     category: str | None = None,
     search: str | None = None,
     timezone_name: str | None = None,
+    day: int | None = None,
 ) -> list[dict[str, object]]:
     """Agrega despesas por categoria, sobre TODAS as transações filtradas.
 
@@ -128,7 +144,7 @@ def expenses_by_category(
     filtros de categoria e busca — para garantir consistência entre gráficos,
     cards e planilha.
     """
-    has_period_filter = month is not None or year is not None
+    has_period_filter = month is not None or year is not None or day is not None
 
     if db.get_bind().dialect.name == "postgresql":
         # Agregação seleciona apenas colunas (categoria + soma). NÃO usar a
@@ -147,11 +163,7 @@ def expenses_by_category(
         if search:
             query = query.filter(models.Transaction.description.ilike(f"%{search.strip()}%"))
         if has_period_filter:
-            local_date = func.timezone(timezone_name or "UTC", models.Transaction.date)
-            if month is not None:
-                query = query.filter(extract("month", local_date) == month)
-            if year is not None:
-                query = query.filter(extract("year", local_date) == year)
+            query = _period_in_sql(db, query, month, year, timezone_name, day)
         rows = (
             query.group_by(models.Transaction.category)
             .order_by(func.sum(models.Transaction.amount).desc())
@@ -166,7 +178,10 @@ def expenses_by_category(
     )
     if has_period_filter:
         client_timezone = resolve_timezone(timezone_name)
-        rows = [t for t in rows if _in_selected_period(t, client_timezone, month, year)]
+        rows = [
+            t for t in rows
+            if _in_selected_period(t, client_timezone, month, year, day)
+        ]
 
     totals: dict[str, Decimal] = {}
     for t in rows:
@@ -185,6 +200,7 @@ def summary_for(
     timezone_name: str | None = None,
     category: str | None = None,
     search: str | None = None,
+    day: int | None = None,
 ) -> dict[str, Decimal]:
     """Resumo financeiro com precisão Decimal, agregado no banco.
 
@@ -205,9 +221,9 @@ def summary_for(
             query = query.filter(
                 models.Transaction.description.ilike(f"%{search.strip()}%")
             )
-        if month is not None or year is not None:
+        if month is not None or year is not None or day is not None:
             if db.get_bind().dialect.name == "postgresql":
-                query = _period_in_sql(db, query, month, year, timezone_name)
+                query = _period_in_sql(db, query, month, year, timezone_name, day)
             else:
                 client_timezone = resolve_timezone(timezone_name)
                 transactions_in_period = [
@@ -216,7 +232,7 @@ def summary_for(
                         models.Transaction.user_id == user_id,
                         models.Transaction.type == transaction_type,
                     )
-                    if _in_selected_period(t, client_timezone, month, year)
+                    if _in_selected_period(t, client_timezone, month, year, day)
                 ]
                 query = query.filter(
                     models.Transaction.id.in_(transactions_in_period or [0])

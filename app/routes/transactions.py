@@ -22,6 +22,16 @@ def _timezone_or_422(timezone_name: str | None) -> str | None:
     return timezone_name
 
 
+def _period_or_422(month: int | None, year: int | None, day: int | None) -> None:
+    """Filtro por dia exige mês e ano: um dia isolado não define um período
+    único ( seria 'todo dia 15 de todo mês', o que confunde o usuário)."""
+    if day is not None and (month is None or year is None):
+        raise HTTPException(
+            status_code=422,
+            detail="Para filtrar por dia, informe o mês e o ano.",
+        )
+
+
 # 1. CRIAR TRANSAÇÃO
 @router.post("/", response_model=schemas.TransactionResponse, status_code=status.HTTP_201_CREATED)
 def create_transaction(
@@ -56,6 +66,7 @@ def create_transaction(
 def get_summary(
     month: Optional[int] = Query(None, ge=1, le=12),
     year: Optional[int] = Query(None, ge=1, le=9999),
+    day: Optional[int] = Query(None, ge=1, le=31),
     timezone_name: str = Query("UTC", max_length=64),
     category: Optional[str] = Query(None, max_length=100),
     search: Optional[str] = Query(None, max_length=200),
@@ -63,10 +74,11 @@ def get_summary(
     current_user: models.User = Depends(get_current_user),
 ):
     """Resumo (entradas, saídas, saldo) respeitando TODOS os filtros que o
-    frontend envia (mês/ano, categoria, busca) — mesmo contrato de filtros
-    dos endpoints de listagem e categorias, para o dashboard ficar
+    frontend envia (mês/ano/dia, categoria, busca) — mesmo contrato de
+    filtros dos endpoints de listagem e categorias, para o dashboard ficar
     consistente."""
     _timezone_or_422(timezone_name)
+    _period_or_422(month, year, day)
     totals = transactions_service.summary_for(
         db,
         current_user.id,
@@ -75,6 +87,7 @@ def get_summary(
         timezone_name=timezone_name,
         category=category,
         search=search,
+        day=day,
     )
     return totals
 
@@ -85,6 +98,7 @@ def get_summary(
 def get_expenses_by_category(
     month: Optional[int] = Query(None, ge=1, le=12),
     year: Optional[int] = Query(None, ge=1, le=9999),
+    day: Optional[int] = Query(None, ge=1, le=31),
     category: Optional[str] = Query(None, min_length=1, max_length=100),
     search: Optional[str] = Query(None, max_length=240),
     timezone_name: str = Query("UTC", max_length=64),
@@ -92,6 +106,7 @@ def get_expenses_by_category(
     current_user: models.User = Depends(get_current_user),
 ):
     _timezone_or_422(timezone_name)
+    _period_or_422(month, year, day)
     return transactions_service.expenses_by_category(
         db,
         current_user.id,
@@ -100,6 +115,7 @@ def get_expenses_by_category(
         category=category,
         search=search,
         timezone_name=timezone_name,
+        day=day,
     )
 
 
@@ -108,6 +124,7 @@ def get_expenses_by_category(
 def list_transactions(
     month: Optional[int] = Query(None, ge=1, le=12),
     year: Optional[int] = Query(None, ge=1, le=9999),
+    day: Optional[int] = Query(None, ge=1, le=31),
     category: Optional[str] = Query(None, min_length=1, max_length=100),
     search: Optional[str] = Query(None, max_length=240),
     timezone_name: str = Query("UTC", max_length=64),
@@ -117,6 +134,7 @@ def list_transactions(
     current_user: models.User = Depends(get_current_user),
 ):
     _timezone_or_422(timezone_name)
+    _period_or_422(month, year, day)
     return transactions_service.filtered_transactions(
         db,
         current_user.id,
@@ -127,6 +145,7 @@ def list_transactions(
         timezone_name=timezone_name,
         skip=skip,
         limit=limit,
+        day=day,
     )
 
 
@@ -204,6 +223,7 @@ def delete_transaction(
 def export_excel(
     month: int | None = Query(None, ge=1, le=12),
     year: int | None = Query(None, ge=1, le=9999),
+    day: int | None = Query(None, ge=1, le=31),
     category: str | None = Query(None, min_length=1, max_length=100),
     search: str | None = Query(None, max_length=240),
     timezone_name: str = Query("UTC", max_length=64),
@@ -211,6 +231,7 @@ def export_excel(
     current_user: models.User = Depends(get_current_user),
 ):
     _timezone_or_422(timezone_name)
+    _period_or_422(month, year, day)
     user_transactions = transactions_service.filtered_transactions(
         db,
         current_user.id,
@@ -219,6 +240,7 @@ def export_excel(
         category=category,
         search=search,
         timezone_name=timezone_name,
+        day=day,
     )
     stream = excel_export.build_workbook(
         user_transactions,
