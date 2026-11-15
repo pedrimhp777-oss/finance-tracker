@@ -177,6 +177,158 @@ def test_invalid_timezone_rejected(client):
     assert res.status_code == 422
 
 
+# --- PAGINAÇÃO NO BANCO (A1) ---
+
+def test_pagination_sql_limits(client):
+    """skip/limit devem retornar exatamente a janela pedida, sem itens
+    duplicados nem perdidos entre páginas."""
+    headers = get_auth_headers(client, "pagsql@email.com")
+    created = []
+    for i in range(7):
+        res = _create(client, headers, description=f"Item{i}", amount="1.00")
+        created.append(res.json()["id"])
+
+    # Ordenação: date desc, id desc -> itens mais novos primeiro (ids 7..1).
+    expected_order = list(reversed(created))
+    page1 = client.get("/transactions/", params={"skip": 0, "limit": 3}, headers=headers)
+    page2 = client.get("/transactions/", params={"skip": 3, "limit": 3}, headers=headers)
+    page3 = client.get("/transactions/", params={"skip": 6, "limit": 3}, headers=headers)
+
+    ids = [t["id"] for t in page1.json()] + \
+          [t["id"] for t in page2.json()] + \
+          [t["id"] for t in page3.json()]
+    assert ids == expected_order
+    assert len(page1.json()) == 3
+    assert len(page2.json()) == 3
+    assert len(page3.json()) == 1  # janela final menor que o limit
+
+
+def test_pagination_applies_filters(client):
+    """Paginação deve respeitar filtros (não paginar tudo e filtrar depois)."""
+    headers = get_auth_headers(client, "pagfilt@email.com")
+    for i in range(4):
+        _create(client, headers, description=f"Despesa{i}", amount="1.00", category="Alimentação")
+    for i in range(3):
+        _create(client, headers, description=f"Receita{i}", amount="1.00", ttype="income", category="Trabalho")
+
+    page = client.get(
+        "/transactions/",
+        params={"category": "Trabalho", "skip": 0, "limit": 2},
+        headers=headers,
+    )
+    assert len(page.json()) == 2
+    assert all(t["category"] == "Trabalho" for t in page.json())
+    total = client.get("/transactions/", params={"category": "Trabalho"}, headers=headers)
+    assert len(total.json()) == 3
+
+
+# --- EDIÇÃO (PUT) ---
+
+def test_update_transaction_success(client):
+    headers = get_auth_headers(client, "edit@email.com")
+    res = _create(client, headers, description="Original", amount="10.00")
+    t_id = res.json()["id"]
+
+    upd = client.put(
+        f"/transactions/{t_id}",
+        json={"description": "Editada", "amount": "25.50", "type": "income", "category": "Trabalho"},
+        headers=headers,
+    )
+    assert upd.status_code == 200
+    body = upd.json()
+    assert body["description"] == "Editada"
+    assert body["amount"] == 25.50
+    assert body["type"] == "income"
+
+    # Persistência real da edição.
+    fetched = client.get(f"/transactions/{t_id}", headers=headers)
+    assert fetched.json()["description"] == "Editada"
+
+
+def test_update_other_users_transaction_rejected(client):
+    headers1 = get_auth_headers(client, "edt1@email.com")
+    headers2 = get_auth_headers(client, "edt2@email.com")
+    res = _create(client, headers1, description="Segredo", amount="10.00")
+    t_id = res.json()["id"]
+
+    upd = client.put(
+        f"/transactions/{t_id}",
+        json={"description": "Invasão", "amount": "1.00", "type": "expense", "category": "Outros"},
+        headers=headers2,
+    )
+    assert upd.status_code == 404
+
+
+# --- AGREGAÇÃO DE CATEGORIAS (A2) ---
+
+def test_expenses_by_category_aggregates_all(client):
+    """A agregação deve somar TODAS as transações do usuário, não só a página.
+    Criamos 150 despesas para ultrapassar o limite de página (100)."""
+    headers = get_auth_headers(client, "cats@email.com")
+    for i in range(150):
+        _create(client, headers, description=f"D{i}", amount="1.00", category="Alimentação")
+    for i in range(30):
+        _create(client, headers, description=f"T{i}", amount="2.00", category="Transporte")
+    # Entradas não entram no gráfico de despesas.
+    _create(client, headers, description="Sal", amount="5000.00", ttype="income", category="Trabalho")
+
+    res = client.get("/transactions/categories", headers=headers)
+    assert res.status_code == 200
+    by_cat = {row["category"]: row["total"] for row in res.json()}
+    assert by_cat["Alimentação"] == 150.00
+    assert by_cat["Transporte"] == 60.00
+    assert "Trabalho" not in by_cat  # entradas excluídas
+    # Ordenado do maior para o menor.
+    totals = [row["total"] for row in res.json()]
+    assert totals == sorted(totals, reverse=True)
+
+
+def test_expenses_by_category_with_filters(client):
+    headers = get_auth_headers(client, "catsf@email.com")
+    _create(client, headers, description="A", amount="10.00", category="Alimentação")
+    _create(client, headers, description="B", amount="20.00", category="Transporte")
+
+    res = client.get(
+        "/transactions/categories",
+        params={"timezone_name": "America/Sao_Paulo"},
+        headers=headers,
+    )
+    by_cat = {row["category"]: row["total"] for row in res.json()}
+    assert by_cat == {"Transporte": 20.00, "Alimentação": 10.00}
+
+
+def test_categories_requires_auth(client):
+    res = client.get("/transactions/categories")
+    assert res.status_code == 401
+
+
+# --- ANTI-ABUSO NO CADASTRO (M1) ---
+
+def test_register_rate_limit(client):
+    """Muitos cadastros seguidos da mesma origem devem acionar o limite."""
+    statuses = []
+    for i in range(15):
+        res = client.post(
+            "/auth/register",
+            json={"name": f"P{i}", "email": f"abuse{i}@email.com", "password": "password123"},
+        )
+        statuses.append(res.status_code)
+        if res.status_code == 429:
+            break
+    assert 429 in statuses
+
+
+# --- RATE LIMITER: LIMITE DE CHAVES (M1) ---
+
+def test_rate_limiter_max_keys_bounded(client):
+    """O armazenamento em memória deve respeitar _MAX_KEYS."""
+    from app import security
+
+    for i in range(security._MAX_KEYS + 50):
+        security.record_attempt(f"k{i}")
+    assert len(security._attempts) <= security._MAX_KEYS
+
+
 # --- EXPORTAÇÃO EXCEL ---
 
 def test_export_excel_with_filters(client):

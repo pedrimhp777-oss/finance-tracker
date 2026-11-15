@@ -61,6 +61,26 @@ def get_summary(
     return totals
 
 
+# 2b. DESPESAS POR CATEGORIA (agregação server-side sobre TODAS as
+# transações filtradas, com os mesmos critérios do resumo e da exportação)
+@router.get("/categories", response_model=List[schemas.CategorySummary])
+def get_expenses_by_category(
+    month: Optional[int] = Query(None, ge=1, le=12),
+    year: Optional[int] = Query(None, ge=1, le=9999),
+    timezone_name: str = Query("UTC", max_length=64),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    _timezone_or_422(timezone_name)
+    return transactions_service.expenses_by_category(
+        db,
+        current_user.id,
+        month=month,
+        year=year,
+        timezone_name=timezone_name,
+    )
+
+
 # 3. LISTAR TRANSAÇÕES (COM PAGINAÇÃO E FILTROS OPCIONAIS)
 @router.get("/", response_model=List[schemas.TransactionResponse])
 def list_transactions(
@@ -75,7 +95,7 @@ def list_transactions(
     current_user: models.User = Depends(get_current_user),
 ):
     _timezone_or_422(timezone_name)
-    results = transactions_service.filtered_transactions(
+    return transactions_service.filtered_transactions(
         db,
         current_user.id,
         month=month,
@@ -83,8 +103,9 @@ def list_transactions(
         category=category,
         search=search,
         timezone_name=timezone_name,
+        skip=skip,
+        limit=limit,
     )
-    return results[skip : skip + limit]
 
 
 # 4. BUSCAR TRANSAÇÃO POR ID

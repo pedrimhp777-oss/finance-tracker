@@ -91,3 +91,10 @@ class SummaryResponse(BaseModel):
     total_income: float
     total_expense: float
     balance: float
+
+
+class CategorySummary(BaseModel):
+    """Agregação de despesas por categoria (gráficos)."""
+
+    category: str
+    total: float
