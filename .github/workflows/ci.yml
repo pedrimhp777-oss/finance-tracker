@@ -26,7 +26,7 @@ jobs:
 
       - name: Run tests (banco isolado em memória)
         env:
-          SECRET_KEY: ci-only-secret-key-not-for-production-0123456789
+          SECRET_KEY: 6d02a011eff5d1c0f15a4f48129f6b53ae4d38a6494d537437388976e49b9f14
         run: python -m pytest -q
 
       - name: Validate Alembic migration in isolated SQLite

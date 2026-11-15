@@ -7,7 +7,13 @@ load_dotenv()
 # Sobrescrevemos (e nunca apenas "setdefault") para garantir que nenhum teste
 # acesse o banco configurado no ambiente (produção/Neon).
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
-os.environ.setdefault("SECRET_KEY", "test-only-secret-key-never-use-in-production")
+# Chave apenas para testes locais/CI (não é segredo de produção).
+# Valor aleatório de 64 hex: precisa passar pelo validador de força que
+# rejeita placeholders como "test-only...".
+os.environ.setdefault(
+    "SECRET_KEY",
+    "6d02a011eff5d1c0f15a4f48129f6b53ae4d38a6494d537437388976e49b9f14",
+)
 
 import pytest
 from fastapi.testclient import TestClient

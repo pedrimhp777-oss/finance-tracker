@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.middleware import NoStoreMiddleware
 from app.routes import transactions, auth
 
 load_dotenv()
@@ -34,6 +35,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Adicionado DEPOIS do CORS para ser a camada mais externa: assim o header
+# final inclui os headers de CORS já calculados e o Cache-Control é aplicado
+# por último, sem interferir no preflight.
+app.add_middleware(NoStoreMiddleware)
 
 app.include_router(auth.router)
 app.include_router(transactions.router)
