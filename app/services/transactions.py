@@ -183,8 +183,15 @@ def summary_for(
     month: int | None = None,
     year: int | None = None,
     timezone_name: str | None = None,
+    category: str | None = None,
+    search: str | None = None,
 ) -> dict[str, Decimal]:
-    """Resumo financeiro com precisão Decimal, agregado no banco."""
+    """Resumo financeiro com precisão Decimal, agregado no banco.
+
+    Aceita os mesmos filtros da listagem (categoria, busca) além do
+    período, para que os cards do dashboard reflitam o que está
+    sendo filtrado.
+    """
     def total_by_type(transaction_type: str) -> Decimal:
         query = db.query(
             func.coalesce(func.sum(models.Transaction.amount), 0)
@@ -192,6 +199,12 @@ def summary_for(
             models.Transaction.user_id == user_id,
             models.Transaction.type == transaction_type,
         )
+        if category:
+            query = query.filter(models.Transaction.category == category)
+        if search:
+            query = query.filter(
+                models.Transaction.description.ilike(f"%{search.strip()}%")
+            )
         if month is not None or year is not None:
             if db.get_bind().dialect.name == "postgresql":
                 query = _period_in_sql(db, query, month, year, timezone_name)
