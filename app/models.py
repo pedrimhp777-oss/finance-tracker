@@ -36,3 +36,32 @@ class Transaction(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     owner = relationship("User", back_populates="transactions")
 
+
+class PasswordResetToken(Base):
+    """Pedido de redefinição de senha.
+
+    Guardamos apenas o **hash SHA-256** do token. Se o banco vazar, os tokens
+    em claro não podem ser usados: o atacante teria só hashes de 256 bits
+    (inviáveis de reverter). O token em claro existe apenas no e-mail enviado.
+
+    Regras aplicadas na rota de redefinição: uso único (`used_at`), expiração
+    curta (`expires_at`) e invalidação de sessões (`token_version` do usuário).
+    """
+
+    __tablename__ = "password_reset_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # SHA-256 em hexadecimal (64 caracteres) — nunca o token em claro.
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    user = relationship("User")
