@@ -38,9 +38,11 @@ origins = [frontend_url] if frontend_url else []
 if is_dev_env:
     origins.extend(["http://localhost:5173", "http://127.0.0.1:5173"])
 
+ALLOWED_ORIGINS: list[str] = [o for o in origins if o]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o for o in origins if o],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -66,13 +68,31 @@ def health(db: Session = Depends(get_db)):
     return {"status": "ok"}
 
 
+def apply_cors_headers(request: Request, response: JSONResponse) -> None:
+    """Replica os headers de CORS numa resposta gerada fora da pilha de middlewares.
+
+    O `ServerErrorMiddleware` do Starlette é a camada MAIS EXTERNA: ele responde
+    antes do `CORSMiddleware`, então um 500 nunca receberia
+    `Access-Control-Allow-Origin`. Sem isso o navegador bloqueia a resposta e o
+    usuário vê "erro de conexão" em vez da mensagem genérica.
+
+    Só emite os headers quando a origem está na lista permitida — nunca
+    refletimos qualquer origem recebida.
+    """
+    origin = request.headers.get("origin")
+    if origin and origin in ALLOWED_ORIGINS:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Vary"] = "Origin"
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     """Resposta genérica para erros não tratados, com `no-store` quando aplicável.
 
     O `ServerErrorMiddleware` do Starlette responde por fora da pilha de
-    middlewares, portanto o `NoStoreMiddleware` não alcança este caso. Sem
-    este handler, um 500 em rota financeira sairia sem `Cache-Control`.
+    middlewares, portanto nem o `NoStoreMiddleware` nem o `CORSMiddleware`
+    alcançam este caso. Por isso os headers são aplicados manualmente aqui.
 
     O corpo é intencionalmente genérico (não vaza stack trace nem detalhes
     internos). O traceback continua sendo registrado pelo servidor ASGI,
@@ -84,6 +104,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
     if is_sensitive_path(request.url.path):
         response.headers["Cache-Control"] = NO_STORE_HEADER
+    apply_cors_headers(request, response)
     return response
 
 
