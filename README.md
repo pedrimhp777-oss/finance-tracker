@@ -81,8 +81,36 @@ python -m pytest -q
 Os testes **sempre** usam SQLite em memória, isolados do banco configurado
 no ambiente (garantido pelo `conftest.py`, que sobrescreve `DATABASE_URL`).
 
-## Migrações (Alembic)
+## Backup lógico
 
+O **Instant Restore** do Neon cobre ~6h e protege contra erro humano — mas não
+contra perder a conta, o projeto ou o provedor. Para isso existe uma cópia
+independente:
+
+```bash
+# gera backups/backup-AAAAMMDD-HHMMSS.json.gz (somente leitura no banco)
+python scripts/backup.py
+
+# diretório externo (recomendado: fora do provedor do banco)
+python scripts/backup.py --out D:/backups
+
+# confere a integridade de um backup já gerado
+python scripts/backup.py --verify backups/backup-2026-11-15.json.gz
+```
+
+O arquivo é JSON comprimido com `meta` (timestamp, versão Alembic, contagem por
+tabela) e `tables` (as linhas). Detalhes que evitam perda silenciosa:
+
+- `amount` é gravado como **string**, não float — centavos não são arredondados;
+- datas em **ISO 8601**; `bytes` em base64;
+- o **hash bcrypt** da senha é preservado (sem ele o backup não restaura login);
+- `--verify` compara a contagem real com a declarada na meta e falha se divergir.
+
+> ⚠️ O arquivo contém dados pessoais (e-mails e hashes de senha). Guarde em
+> local protegido, **nunca** no Git. O diretório `backups/` já está no
+> `.gitignore`.
+
+## Migrações (Alembic)
 ```bash
 # Ambiente novo (cria o schema completo):
 alembic upgrade head
