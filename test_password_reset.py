@@ -246,3 +246,63 @@ def test_link_nao_vaza_no_log_de_producao(monkeypatch, caplog):
         send_password_reset_email("x@email.com", "https://app/reset?reset_token=SEGREDO123")
 
     assert "SEGREDO123" not in caplog.text
+
+
+# ------------------------------------------------------------------ diagnóstico
+
+def test_mascara_endereco_preserva_dominio():
+    assert email_service._mask_address("pedro@gmail.com") == "***@gmail.com"
+    assert email_service._mask_address("sem-arroba") == "***"
+
+
+def test_mensagem_do_provedor_e_extraida_e_mascarada():
+    """O log precisa dizer POR QUE falhou, sem expor endereços."""
+
+    class Resposta:
+        status_code = 422
+
+        def json(self):
+            return {"message": "The from address pedro@exemplo.com is not valid"}
+
+        text = ""
+
+    msg = email_service._provider_message(Resposta())
+    assert "not valid" in msg
+    assert "pedro@exemplo.com" not in msg
+    assert "***@exemplo.com" in msg
+
+
+def test_mensagem_do_provedor_nao_quebra_com_corpo_invalido():
+    class Resposta:
+        status_code = 500
+        text = "<html>erro</html>"
+
+        def json(self):
+            raise ValueError("nao e json")
+
+    assert "erro" in email_service._provider_message(Resposta())
+
+
+def test_log_de_configuracao_avisa_quando_falta_variavel(monkeypatch, caplog):
+    """Este log existe para tornar visível 'variável não aplicada na Render'."""
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("EMAIL_FROM", raising=False)
+
+    with caplog.at_level("WARNING"):
+        email_service.log_email_configuration()
+
+    assert "NAO configurado" in caplog.text
+    assert "ausente" in caplog.text
+
+
+def test_log_de_configuracao_confirma_quando_presente(monkeypatch, caplog):
+    monkeypatch.setenv("RESEND_API_KEY", "re_teste")
+    monkeypatch.setenv("EMAIL_FROM", "Finance Tracker <onboarding@resend.dev>")
+
+    with caplog.at_level("INFO"):
+        email_service.log_email_configuration()
+
+    assert "configurado" in caplog.text
+    # O endereço completo nunca aparece no log.
+    assert "onboarding@resend.dev" not in caplog.text
+    assert "***@resend.dev" in caplog.text
