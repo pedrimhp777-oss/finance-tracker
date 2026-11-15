@@ -50,6 +50,30 @@ class UserCreate(UserBase):
         return value
 
 
+class ForgotPasswordRequest(BaseModel):
+    """Pedido de recuperação. A resposta é sempre genérica (sem enumeração)."""
+
+    email: EmailStr
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value):
+        return value.strip().lower() if isinstance(value, str) else value
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=16, max_length=200)
+    new_password: str = Field(min_length=8)
+
+    @field_validator("new_password")
+    @classmethod
+    def limit_password_bytes(cls, value: str) -> str:
+        # Mesmo limite do cadastro: o bcrypt ignora bytes após o 72º.
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("A senha deve ter no máximo 72 bytes.")
+        return value
+
+
 class UserResponse(UserBase):
     id: int
 

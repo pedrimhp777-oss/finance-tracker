@@ -1,4 +1,7 @@
+import hashlib
 import secrets
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
@@ -7,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app import config, models, schemas, security
 from app.database import get_db
+from app.services.email import send_password_reset_email
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
@@ -169,3 +173,141 @@ def logout(
 @router.get("/me", response_model=schemas.UserResponse)
 def get_me(current_user: models.User = Depends(security.get_current_user)):
     return current_user
+
+
+# ---------------------------------------------------------------------------
+# Recuperação de senha
+# ---------------------------------------------------------------------------
+# Regras que sustentam a segurança destas duas rotas:
+#
+# 1. NENHUMA enumeração de conta: `forgot-password` responde 202 idêntico
+#    exista ou não o e-mail, e não informa se o envio ocorreu.
+# 2. O token em claro só existe no e-mail; o banco guarda SHA-256.
+# 3. Uso único (`used_at`), expiração curta (30 min) e invalidação de TODAS as
+#    sessões após a troca (`token_version`), pois o motivo do reset pode ser
+#    justamente uma conta comprometida.
+# 4. Rate limit por IP e por e-mail: evita varredura de contas e "mail bombing".
+
+PASSWORD_RESET_TTL_MINUTES = config.PASSWORD_RESET_TTL_MINUTES
+
+
+def _hash_reset_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _reset_link(token: str) -> str:
+    base = config.PASSWORD_RESET_URL or ""
+    if not base:
+        # Sem URL configurada o e-mail seria inútil; o chamador trata.
+        return ""
+    return f"{base}/?reset_token={quote(token)}"
+
+
+@router.post("/forgot-password", status_code=status.HTTP_202_ACCEPTED)
+def forgot_password(
+    request: Request,
+    payload: schemas.ForgotPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    """Envia o link de redefinição — sempre com a mesma resposta.
+
+    Um 404 para e-mail inexistente revelaria quais contas existem.
+    """
+    ip = _client_ip(request)
+    email = str(payload.email).strip().lower()
+
+    # `record_attempt` registra E aplica o limite. Usar apenas
+    # `check_auth_rate_limit` aqui seria inócuo: sem registrar, a janela
+    # ficaria sempre vazia e o limite nunca dispararia.
+    try:
+        security.record_attempt(f"forgot-ip:{ip}")
+        security.record_attempt(f"forgot-email:{email}")
+    except security.RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Muitas solicitações. Tente novamente em alguns minutos.",
+        ) from exc
+
+    user = db.query(models.User).filter(models.User.email == email).first()
+
+    if user is not None:
+        now = datetime.now(timezone.utc)
+
+        # Invalida pedidos anteriores deste usuário: só o link mais recente vale.
+        db.query(models.PasswordResetToken).filter(
+            models.PasswordResetToken.user_id == user.id,
+            models.PasswordResetToken.used_at.is_(None),
+        ).delete(synchronize_session=False)
+
+        token = secrets.token_urlsafe(32)
+        db.add(
+            models.PasswordResetToken(
+                user_id=user.id,
+                token_hash=_hash_reset_token(token),
+                expires_at=now + timedelta(minutes=PASSWORD_RESET_TTL_MINUTES),
+            )
+        )
+        db.commit()
+
+        link = _reset_link(token)
+        if link:
+            send_password_reset_email(user.email, link)
+
+    # Resposta genérica: mesmo corpo, mesmo status, exista ou não a conta.
+    return {
+        "detail": "Se existir uma conta com este e-mail, enviamos um link de redefinição."
+    }
+
+
+@router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT)
+def reset_password(
+    request: Request,
+    payload: schemas.ResetPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    """Troca a senha usando um token válido e revoga todas as sessões."""
+    try:
+        security.record_attempt(f"reset-ip:{_client_ip(request)}")
+    except security.RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Muitas tentativas. Tente novamente em alguns minutos.",
+        ) from exc
+
+    invalid = HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Link inválido ou expirado. Solicite um novo.",
+    )
+
+    registro = (
+        db.query(models.PasswordResetToken)
+        .filter(models.PasswordResetToken.token_hash == _hash_reset_token(payload.token))
+        .first()
+    )
+    if registro is None or registro.used_at is not None:
+        raise invalid
+
+    expira = registro.expires_at
+    if expira.tzinfo is None:  # SQLite devolve naive; o banco grava UTC.
+        expira = expira.replace(tzinfo=timezone.utc)
+    if expira <= datetime.now(timezone.utc):
+        raise invalid
+
+    user = db.query(models.User).filter(models.User.id == registro.user_id).first()
+    if user is None:
+        raise invalid
+
+    user.hashed_password = security.hash_password(payload.new_password)
+    # Revoga sessões antigas: se a conta estava comprometida, o token do
+    # invasor morre junto com a troca de senha.
+    user.token_version = (user.token_version or 0) + 1
+    registro.used_at = datetime.now(timezone.utc)
+
+    # Uso único de fato: nenhum outro pedido pendente continua válido.
+    db.query(models.PasswordResetToken).filter(
+        models.PasswordResetToken.user_id == user.id,
+        models.PasswordResetToken.id != registro.id,
+    ).delete(synchronize_session=False)
+
+    db.commit()
+    return None

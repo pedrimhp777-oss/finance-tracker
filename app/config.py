@@ -30,3 +30,14 @@ COOKIE_SAMESITE = "lax" if IS_DEV_ENV else "none"
 AUTH_COOKIE_NAME = "access_token"
 CSRF_COOKIE_NAME = "csrf_token"
 CSRF_HEADER_NAME = "X-CSRF-Token"
+
+# --- Recuperação de senha ---------------------------------------------
+# Validade do link enviado por e-mail. Curto de propósito: reduz a janela de
+# uso de um token que vazou da caixa de entrada.
+PASSWORD_RESET_TTL_MINUTES = int(os.getenv("PASSWORD_RESET_TTL_MINUTES", "30"))
+# Base do link enviado ao usuário (o frontend monta a tela em /reset-password).
+# Sem barra final. Ex.: https://finance-tracker-front-pearl.vercel.app
+PASSWORD_RESET_URL = (
+    os.getenv("PASSWORD_RESET_URL", "").strip().rstrip("/")
+    or os.getenv("FRONTEND_URL", "").strip().rstrip("/")
+)

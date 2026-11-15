@@ -140,6 +140,42 @@ Headers mascarados: `Authorization`, `Cookie`, `X-CSRF-Token`, `X-API-Key`,
 Na prática, um erro em `/auth/login` **não** leva a senha, e um erro em
 `/transactions` **não** leva descrição, categoria ou valor.
 
+## Recuperação de senha
+
+Fluxo em duas rotas, com resposta **idêntica** exista ou não a conta (sem
+enumeração):
+
+| Rota | Comportamento |
+|---|---|
+| `POST /auth/forgot-password` | sempre `202` com a mesma mensagem; se a conta existir, cria token e envia e-mail |
+| `POST /auth/reset-password` | `204` ao trocar; `400` genérico para token inválido, expirado ou já usado |
+
+### Regras de segurança
+
+- o token em claro (43 chars, `secrets.token_urlsafe(32)`) **só existe no
+  e-mail**; o banco guarda apenas `SHA-256` — vazamento do banco não permite
+  redefinir senha de ninguém;
+- **uso único** (`used_at`) e expiração de **30 min** (`PASSWORD_RESET_TTL_MINUTES`);
+- pedir um link novo **invalida os anteriores**;
+- a troca de senha **incrementa `token_version`**, derrubando todas as sessões
+  — se o motivo do reset foi invasão, o token do invasor morre junto;
+- rate limit por **IP** e por **e-mail** (10 / 5 min) contra varredura de
+  contas e *mail bombing*;
+- o link **nunca** aparece no log em produção (só em `APP_ENV` de desenvolvimento).
+
+### Configuração do envio
+
+```bash
+PASSWORD_RESET_URL=https://finance-tracker-front-pearl.vercel.app
+PASSWORD_RESET_TTL_MINUTES=30
+RESEND_API_KEY=re_...          # provedor Resend (HTTP, sem SDK)
+EMAIL_FROM="Finance Tracker <no-reply@seudominio.com>"
+```
+
+Sem `RESEND_API_KEY`/`EMAIL_FROM` a rota continua respondendo `202` (não vaza
+existência de conta), mas **nenhum e-mail sai** — em desenvolvimento o link é
+impresso no console para testar o fluxo.
+
 ## Migrações (Alembic)
 ```bash
 # Ambiente novo (cria o schema completo):
@@ -163,6 +199,8 @@ de desempenho estão em `migrations/versions/0002_indexes.py`.
 | POST | `/auth/login` | Login (OAuth2 form; retorna JWT) |
 | GET | `/auth/me` | Dados do usuário autenticado |
 | POST | `/auth/logout` | Encerra a sessão revogando **todos** os tokens do usuário |
+| POST | `/auth/forgot-password` | Solicita link de redefinição (sempre `202`) |
+| POST | `/auth/reset-password` | Troca a senha com o token do e-mail (revoga sessões) |
 | POST | `/transactions/` | Criar transação |
 | GET | `/transactions/` | Listar com filtros (`month`, `year`, `category`, `search`, `timezone_name`, `skip`, `limit`) |
 | GET | `/transactions/summary` | Resumo financeiro agregado |
