@@ -298,6 +298,79 @@ def test_expenses_by_category_with_filters(client):
     assert by_cat == {"Transporte": 20.00, "Alimentação": 10.00}
 
 
+# --- RESUMO COM FILTROS DE CATEGORIA E BUSCA ---
+
+def test_summary_respects_category_filter(client):
+    headers = get_auth_headers(client, "sumcat@email.com")
+    _create(client, headers, description="Pizza", amount="100.00", ttype="expense", category="Alimentação")
+    _create(client, headers, description="Uber", amount="40.00", ttype="expense", category="Transporte")
+    _create(client, headers, description="Salario", amount="1000.00", ttype="income", category="Trabalho")
+
+    res = client.get("/transactions/summary", params={"category": "Transporte"}, headers=headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert float(body["total_expense"]) == 40.00
+    assert float(body["total_income"]) == 0.00
+    assert float(body["balance"]) == -40.00
+
+
+def test_summary_respects_search_filter(client):
+    headers = get_auth_headers(client, "sumsearch@email.com")
+    _create(client, headers, description="Assinatura Netflix", amount="50.00", ttype="expense", category="Lazer")
+    _create(client, headers, description="Cinema", amount="30.00", ttype="expense", category="Lazer")
+    _create(client, headers, description="Salario", amount="1000.00", ttype="income", category="Trabalho")
+
+    res = client.get("/transactions/summary", params={"search": "assin"}, headers=headers)
+    assert res.status_code == 200
+    body = res.json()
+    assert float(body["total_expense"]) == 50.00
+    assert float(body["total_income"]) == 0.00
+
+
+def test_summary_combined_category_search_period(client):
+    headers = get_auth_headers(client, "sumall@email.com")
+    _create(client, headers, description="Pizza", amount="100.00", ttype="expense", category="Alimentação")
+    _create(client, headers, description="Pizzaria OK", amount="70.00", ttype="expense", category="Alimentação")
+    _create(client, headers, description="Almoço", amount="35.00", ttype="expense", category="Alimentação")
+    _create(client, headers, description="Uber", amount="40.00", ttype="expense", category="Transporte")
+
+    # Data-alvo: "Pizza" vai para 2026-03-15 (dentro do período março);
+    # "Pizzaria OK" vai para fevereiro (fora do período).
+    from conftest import engine
+    from sqlalchemy.orm import sessionmaker
+    from app import models
+
+    listing = client.get("/transactions/", headers=headers).json()
+    by_desc = {row["description"]: row["id"] for row in listing}
+    s = sessionmaker(bind=engine)()
+    t = s.get(models.Transaction, by_desc["Pizza"])
+    t.date = datetime(2026, 3, 15, 12, 0, tzinfo=timezone.utc)
+    t2 = s.get(models.Transaction, by_desc["Pizzaria OK"])
+    t2.date = datetime(2026, 2, 10, 12, 0, tzinfo=timezone.utc)
+    s.commit()
+    s.close()
+
+    # Categoria + busca + período (março/2026): só "Pizza" passa nos três filtros.
+    res = client.get(
+        "/transactions/summary",
+        params={"category": "Alimentação", "search": "pizz", "year": 2026, "month": 3},
+        headers=headers,
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert float(body["total_expense"]) == 100.00
+    assert float(body["total_income"]) == 0.00
+
+    # Mesma combinação, período fevereiro/2026: só "Pizzaria OK".
+    res_feb = client.get(
+        "/transactions/summary",
+        params={"category": "Alimentação", "search": "pizz", "year": 2026, "month": 2},
+        headers=headers,
+    )
+    assert res_feb.status_code == 200
+    assert float(res_feb.json()["total_expense"]) == 70.00
+
+
 def test_categories_requires_auth(client):
     res = client.get("/transactions/categories")
     assert res.status_code == 401

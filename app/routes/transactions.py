@@ -47,9 +47,15 @@ def get_summary(
     month: Optional[int] = Query(None, ge=1, le=12),
     year: Optional[int] = Query(None, ge=1, le=9999),
     timezone_name: str = Query("UTC", max_length=64),
+    category: Optional[str] = Query(None, max_length=100),
+    search: Optional[str] = Query(None, max_length=200),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
 ):
+    """Resumo (entradas, saídas, saldo) respeitando TODOS os filtros que o
+    frontend envia (mês/ano, categoria, busca) — mesmo contrato de filtros
+    dos endpoints de listagem e categorias, para o dashboard ficar
+    consistente."""
     _timezone_or_422(timezone_name)
     totals = transactions_service.summary_for(
         db,
@@ -57,6 +63,8 @@ def get_summary(
         month=month,
         year=year,
         timezone_name=timezone_name,
+        category=category,
+        search=search,
     )
     return totals
 
