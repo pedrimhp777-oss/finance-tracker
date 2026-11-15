@@ -106,8 +106,67 @@ def send_password_reset_email(to_email: str, reset_link: str) -> bool:
         return False
 
     if response.status_code >= 400:
-        logger.error("Provedor de e-mail recusou o envio (HTTP %s).", response.status_code)
+        logger.error(
+            "Provedor de e-mail recusou o envio (HTTP %s): %s",
+            response.status_code,
+            _provider_message(response),
+        )
         return False
 
     logger.info("E-mail de redefinição enviado.")
     return True
+
+
+def _mask_address(address: str) -> str:
+    """Mascara a parte local de um endereço, preservando o domínio.
+
+    O domínio ajuda a diagnosticar (ex.: remetente de teste vs. domínio
+    próprio) sem expor o endereço de quem opera o serviço.
+    """
+    local, _, domain = address.partition("@")
+    if not domain:
+        return "***"
+    return f"***@{domain}"
+
+
+def _provider_message(response) -> str:
+    """Extrai a mensagem de erro do provedor, sem vazar endereços.
+
+    A Resend devolve algo como {"message": "The from address is not valid"}.
+    Isso responde "por que falhou" em segundos, em vez de exigir adivinhação.
+    """
+    try:
+        corpo = response.json()
+    except Exception:
+        texto = (getattr(response, "text", "") or "")[:200]
+    else:
+        texto = str(corpo.get("message") or corpo)[:200] if isinstance(corpo, dict) else str(corpo)[:200]
+
+    # Nunca expor e-mail completo no log.
+    import re
+
+    return re.sub(r"[\w.+-]+@[\w.-]+", lambda m: _mask_address(m.group(0)), texto)
+
+
+def log_email_configuration() -> None:
+    """Registra, na inicialização, se o envio de e-mail está configurado.
+
+    Existe para tornar visível a falha mais comum em produção: variável de
+    ambiente não aplicada. Sem este log, o sintoma é "o e-mail não chegou" e a
+    causa fica invisível (a rota responde 202 de propósito).
+    """
+    api_key = bool((os.getenv("RESEND_API_KEY") or "").strip())
+    sender = (os.getenv("EMAIL_FROM") or "").strip()
+
+    if api_key and sender:
+        logger.info(
+            "E-mail configurado: provedor=Resend, remetente=%s", _mask_address(sender)
+        )
+        return
+
+    logger.warning(
+        "E-mail NAO configurado (RESEND_API_KEY=%s, EMAIL_FROM=%s): "
+        "recuperacao de senha respondera 202 mas nao enviara nada.",
+        "presente" if api_key else "ausente",
+        "presente" if sender else "ausente",
+    )
