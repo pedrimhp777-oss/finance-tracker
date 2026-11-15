@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 import httpx
 
@@ -24,7 +25,9 @@ from app import config
 logger = logging.getLogger("finance_tracker.email")
 
 RESEND_ENDPOINT = "https://api.resend.com/emails"
+BREVO_ENDPOINT = "https://api.brevo.com/v3/smtp/email"
 TIMEOUT_SECONDS = 10.0
+DEFAULT_SENDER_NAME = "Finance Tracker"
 
 SUBJECT = "Redefinição de senha — Finance Tracker"
 
@@ -60,6 +63,74 @@ def _html_body(reset_link: str, ttl_minutes: int) -> str:
 </div>"""
 
 
+def _parse_sender(raw: str) -> tuple[str, str]:
+    """Interpreta `EMAIL_FROM` como "Nome <email>" ou apenas "email".
+
+    Tolerante de propósito: já houve configuração sem os `<>` em produção
+    ("Finance Tracker onboarding@resend.dev"), que o provedor recusava com
+    422. Aqui o formato errado é aceito e corrigido, em vez de virar falha
+    silenciosa.
+    """
+    raw = (raw or "").strip()
+    match = re.match(r"^\s*(.*?)\s*<([^>]+)>\s*$", raw)
+    if match:
+        nome = match.group(1).strip().strip('"').strip() or DEFAULT_SENDER_NAME
+        return nome, match.group(2).strip()
+
+    partes = raw.split()
+    if len(partes) > 1:
+        # Sem <>: o último token é o endereço, o resto é o nome.
+        return " ".join(partes[:-1]), partes[-1]
+    return DEFAULT_SENDER_NAME, raw
+
+
+def active_provider() -> str | None:
+    """Provedor efetivo, por ordem de preferência.
+
+    Brevo primeiro porque permite verificar um único endereço de e-mail —
+    não exige domínio próprio, que é o cenário atual do projeto.
+    """
+    if (os.getenv("BREVO_API_KEY") or "").strip():
+        return "brevo"
+    if (os.getenv("RESEND_API_KEY") or "").strip():
+        return "resend"
+    return None
+
+
+def _send_via_brevo(
+    api_key: str, nome: str, remetente: str, to_email: str, texto: str, html: str
+):
+    return httpx.post(
+        BREVO_ENDPOINT,
+        json={
+            "sender": {"name": nome, "email": remetente},
+            "to": [{"email": to_email}],
+            "subject": SUBJECT,
+            "textContent": texto,
+            "htmlContent": html,
+        },
+        headers={"api-key": api_key, "accept": "application/json"},
+        timeout=TIMEOUT_SECONDS,
+    )
+
+
+def _send_via_resend(
+    api_key: str, nome: str, remetente: str, to_email: str, texto: str, html: str
+):
+    return httpx.post(
+        RESEND_ENDPOINT,
+        json={
+            "from": f"{nome} <{remetente}>",
+            "to": [to_email],
+            "subject": SUBJECT,
+            "text": texto,
+            "html": html,
+        },
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=TIMEOUT_SECONDS,
+    )
+
+
 def send_password_reset_email(to_email: str, reset_link: str) -> bool:
     """Envia o e-mail com o link. Retorna se o envio foi aceito pelo provedor.
 
@@ -68,52 +139,55 @@ def send_password_reset_email(to_email: str, reset_link: str) -> bool:
     (o que revelaria que o e-mail existe).
     """
     ttl = config.PASSWORD_RESET_TTL_MINUTES
-    api_key = (os.getenv("RESEND_API_KEY") or "").strip()
-    sender = (os.getenv("EMAIL_FROM") or "").strip()
+    provedor = active_provider()
+    sender_raw = (os.getenv("EMAIL_FROM") or "").strip()
+    nome, remetente = _parse_sender(sender_raw)
 
-    if not api_key or not sender:
+    if provedor is None or not remetente:
         if config.IS_DEV_ENV:
             # Em desenvolvimento o link vai para o console: é assim que se
             # testa o fluxo sem caixa de e-mail.
             logger.warning(
-                "RESEND_API_KEY/EMAIL_FROM ausentes (modo dev). Link de redefinição: %s",
+                "Provedor de e-mail nao configurado (modo dev). Link de redefinicao: %s",
                 reset_link,
             )
         else:
             logger.warning(
-                "RESEND_API_KEY/EMAIL_FROM ausentes: e-mail de redefinição não enviado."
+                "Provedor de e-mail nao configurado "
+                "(BREVO_API_KEY/RESEND_API_KEY/EMAIL_FROM): "
+                "e-mail de redefinicao nao enviado."
             )
         return False
 
-    payload = {
-        "from": sender,
-        "to": [to_email],
-        "subject": SUBJECT,
-        "text": _text_body(reset_link, ttl),
-        "html": _html_body(reset_link, ttl),
-    }
+    chave = (
+        (os.getenv("BREVO_API_KEY") or "").strip()
+        if provedor == "brevo"
+        else (os.getenv("RESEND_API_KEY") or "").strip()
+    )
+    texto = _text_body(reset_link, ttl)
+    html = _html_body(reset_link, ttl)
+
+    enviar = _send_via_brevo if provedor == "brevo" else _send_via_resend
 
     try:
-        response = httpx.post(
-            RESEND_ENDPOINT,
-            json=payload,
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=TIMEOUT_SECONDS,
-        )
+        response = enviar(chave, nome, remetente, to_email, texto, html)
     except httpx.HTTPError as exc:
         # Sem detalhes do destinatário no log (evita PII).
-        logger.error("Falha de rede ao enviar e-mail de redefinição: %s", type(exc).__name__)
+        logger.error(
+            "Falha de rede ao enviar e-mail de redefinicao: %s", type(exc).__name__
+        )
         return False
 
     if response.status_code >= 400:
         logger.error(
-            "Provedor de e-mail recusou o envio (HTTP %s): %s",
+            "Provedor de e-mail recusou o envio (HTTP %s, %s): %s",
             response.status_code,
+            provedor,
             _provider_message(response),
         )
         return False
 
-    logger.info("E-mail de redefinição enviado.")
+    logger.info("E-mail de redefinicao enviado via %s.", provedor)
     return True
 
 
@@ -155,18 +229,21 @@ def log_email_configuration() -> None:
     ambiente não aplicada. Sem este log, o sintoma é "o e-mail não chegou" e a
     causa fica invisível (a rota responde 202 de propósito).
     """
-    api_key = bool((os.getenv("RESEND_API_KEY") or "").strip())
-    sender = (os.getenv("EMAIL_FROM") or "").strip()
+    provedor = active_provider()
+    sender_raw = (os.getenv("EMAIL_FROM") or "").strip()
+    _, remetente = _parse_sender(sender_raw)
 
-    if api_key and sender:
+    if provedor and remetente:
         logger.info(
-            "E-mail configurado: provedor=Resend, remetente=%s", _mask_address(sender)
+            "E-mail configurado: provedor=%s, remetente=%s",
+            provedor.capitalize(),
+            _mask_address(remetente),
         )
         return
 
     logger.warning(
-        "E-mail NAO configurado (RESEND_API_KEY=%s, EMAIL_FROM=%s): "
+        "E-mail NAO configurado (provedor=%s, EMAIL_FROM=%s): "
         "recuperacao de senha respondera 202 mas nao enviara nada.",
-        "presente" if api_key else "ausente",
-        "presente" if sender else "ausente",
+        provedor or "ausente",
+        "presente" if remetente else "ausente",
     )

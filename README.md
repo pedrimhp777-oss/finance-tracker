@@ -168,13 +168,27 @@ enumeração):
 ```bash
 PASSWORD_RESET_URL=https://finance-tracker-front-pearl.vercel.app
 PASSWORD_RESET_TTL_MINUTES=30
-RESEND_API_KEY=re_...          # provedor Resend (HTTP, sem SDK)
-EMAIL_FROM="Finance Tracker <no-reply@seudominio.com>"
+EMAIL_FROM="Finance Tracker <seu-email@gmail.com>"
+
+BREVO_API_KEY=xkeysib-...   # preferido: verifica UM endereço, sem domínio
+# RESEND_API_KEY=re_...     # alternativa: exige domínio verificado
 ```
 
-Sem `RESEND_API_KEY`/`EMAIL_FROM` a rota continua respondendo `202` (não vaza
-existência de conta), mas **nenhum e-mail sai** — em desenvolvimento o link é
-impresso no console para testar o fluxo.
+Dois provedores são suportados, ambos por HTTP puro (`httpx`), sem SDK:
+
+| Provedor | Verificação exigida | Escolha |
+|---|---|---|
+| **Brevo** | **um endereço de e-mail** (confirmação no painel) | ✅ padrão recomendado — não exige domínio próprio; 300 envios/dia no free |
+| Resend | domínio verificado (SPF/DKIM) | alternativa, melhor entregabilidade quando houver domínio |
+
+`BREVO_API_KEY` tem prioridade se as duas chaves existirem.
+
+`EMAIL_FROM` aceita `Nome <email>` **ou** apenas `email` — o formato sem `<>`,
+que já quebrou em produção, é interpretado e corrigido automaticamente.
+
+Sem chave configurada a rota continua respondendo `202` (não vaza existência
+de conta), mas **nenhum e-mail sai** — em desenvolvimento o link é impresso no
+console. Na inicialização, o log informa se o envio está configurado.
 
 ## Migrações (Alembic)
 ```bash
