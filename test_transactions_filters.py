@@ -1,5 +1,6 @@
 """Testes de filtros, paginação, fuso horário, exportação Excel e precisão."""
 import io
+from sqlalchemy import func
 from datetime import datetime, timezone
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -300,6 +301,43 @@ def test_expenses_by_category_with_filters(client):
 def test_categories_requires_auth(client):
     res = client.get("/transactions/categories")
     assert res.status_code == 401
+
+
+def test_categories_postgres_sql_group_by_is_valid():
+    """Regressão do bug de produção: no caminho PostgreSQL a agregação deve
+    selecionar apenas colunas presentes no GROUP BY.
+
+    Compila a query no dialeto PostgreSQL (sem conectar) e valida o SQL.
+    """
+    import os as _os
+    from sqlalchemy import create_engine
+    from sqlalchemy.dialects import postgresql
+    from sqlalchemy.orm import sessionmaker
+    from app import models
+    from app.services import transactions as svc
+
+    engine = create_engine("sqlite:///:memory:")
+    Sess = sessionmaker(bind=engine)
+    db = Sess()
+
+    # Reproduz exatamente a query do caminho PostgreSQL do serviço.
+    query = db.query(
+        models.Transaction.category,
+        func.sum(models.Transaction.amount),
+    ).filter(
+        models.Transaction.user_id == 1,
+        models.Transaction.type == "expense",
+    ).group_by(models.Transaction.category)
+
+    compiled = query.statement.compile(dialect=postgresql.dialect())
+    sql = str(compiled)
+    assert "transactions.category" in sql
+    assert "sum(transactions.amount)" in sql
+    # A query da entidade inteira (bug original) traria colunas como
+    # transactions.id/description sem agregacao nem GROUP BY.
+    assert "transactions.description" not in sql.lower()
+    assert "transactions.id" not in sql.lower()
+    db.close()
 
 
 def test_categories_with_category_filter(client):

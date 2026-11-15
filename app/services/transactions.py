@@ -131,9 +131,21 @@ def expenses_by_category(
     has_period_filter = month is not None or year is not None
 
     if db.get_bind().dialect.name == "postgresql":
-        query = _base_query(db, user_id, category, search).filter(
+        # Agregação seleciona apenas colunas (categoria + soma). NÃO usar a
+        # query de entidade aqui: SELECT de colunas não agrupadas com
+        # GROUP BY é rejeitado pelo PostgreSQL (no SQLite não dá erro,
+        # o que esconderia o bug nos testes).
+        query = db.query(
+            models.Transaction.category,
+            func.sum(models.Transaction.amount),
+        ).filter(
+            models.Transaction.user_id == user_id,
             models.Transaction.type == "expense",
         )
+        if category:
+            query = query.filter(models.Transaction.category == category)
+        if search:
+            query = query.filter(models.Transaction.description.ilike(f"%{search.strip()}%"))
         if has_period_filter:
             local_date = func.timezone(timezone_name or "UTC", models.Transaction.date)
             if month is not None:
