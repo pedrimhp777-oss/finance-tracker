@@ -10,12 +10,30 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
 def _client_ip(request: Request) -> str:
-    # Atrás de proxy (Render/Vercel), cada proxy anexa o IP de quem conectou
-    # ao fim do X-Forwarded-For: o ÚLTIMO elemento é o adicionado pelo proxy
-    # de confiança e é o único que não pode ser forjado pelo cliente.
-    forwarded = request.headers.get("x-forwarded-for", "")
+    """Resolve o IP real do cliente na infraestrutura da Render.
+
+    Cadeia real: Cliente -> Cloudflare (edge da Render) -> proxy da Render -> app.
+
+    1. `CF-Connecting-IP` / `True-Client-Ip`: definidos pelo edge Cloudflare,
+       que SOBRESCREVE qualquer valor enviado pelo cliente — não forjáveis.
+    2. `X-Forwarded-For`: a Render documenta que o PRIMEIRO IP da lista é o
+       cliente real (o valor vindo do cliente é substituído pelo proxy; o
+       segundo elemento é o edge IP da Cloudflare, compartilhado).
+    3. Fallback: IP de conexão direta (uso local/sem proxy).
+
+    Limitação: se a aplicação for hospedada fora da Render (sem o proxy
+    confiável na frente), o primeiro elemento do XFF volta a ser forjável.
+    Nesse caso, confiure um proxy de confiança ou remova o fallback.
+    """
+    cf_ip = request.headers.get("cf-connecting-ip", "").strip()
+    if cf_ip:
+        return cf_ip.split(",")[0].strip()
+    true_client = request.headers.get("true-client-ip", "").strip()
+    if true_client:
+        return true_client.split(",")[0].strip()
+    forwarded = request.headers.get("x-forwarded-for", "").strip()
     if forwarded:
-        return forwarded.split(",")[-1].strip()
+        return forwarded.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
 
 
