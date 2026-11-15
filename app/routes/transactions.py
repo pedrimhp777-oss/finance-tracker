@@ -67,6 +67,8 @@ def get_summary(
 def get_expenses_by_category(
     month: Optional[int] = Query(None, ge=1, le=12),
     year: Optional[int] = Query(None, ge=1, le=9999),
+    category: Optional[str] = Query(None, min_length=1, max_length=100),
+    search: Optional[str] = Query(None, max_length=240),
     timezone_name: str = Query("UTC", max_length=64),
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user),
@@ -77,6 +79,8 @@ def get_expenses_by_category(
         current_user.id,
         month=month,
         year=year,
+        category=category,
+        search=search,
         timezone_name=timezone_name,
     )
 

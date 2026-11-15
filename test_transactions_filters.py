@@ -302,6 +302,90 @@ def test_categories_requires_auth(client):
     assert res.status_code == 401
 
 
+def test_categories_with_category_filter(client):
+    """Filtro de categoria isolado: pizza deve mostrar só a categoria pedida."""
+    headers = get_auth_headers(client, "catfilt@email.com")
+    _create(client, headers, description="A", amount="10.00", category="Alimentação")
+    _create(client, headers, description="B", amount="20.00", category="Transporte")
+
+    res = client.get(
+        "/transactions/categories",
+        params={"category": "Transporte"},
+        headers=headers,
+    )
+    assert [(r["category"], r["total"]) for r in res.json()] == [("Transporte", 20.00)]
+
+
+def test_categories_with_search_filter(client):
+    """Filtro de busca isolado: a busca casa com a descrição, e a pizza soma
+    as categorias das transações cuja descrição casa."""
+    headers = get_auth_headers(client, "catsearch@email.com")
+    _create(client, headers, description="Mercado jan", amount="10.00", category="Alimentação")
+    _create(client, headers, description="Uber", amount="20.00", category="Transporte")
+    _create(client, headers, description="Mercado fev", amount="30.00", category="Transporte")
+
+    res = client.get(
+        "/transactions/categories",
+        params={"search": "Mercado"},
+        headers=headers,
+    )
+    by_cat = {r["category"]: r["total"] for r in res.json()}
+    assert by_cat == {"Transporte": 30.00, "Alimentação": 10.00}
+
+
+def test_categories_with_combined_filters(client):
+    """Categoria + busca + período + fuso combinados, com o MESMO critério
+    da listagem/resumo/exportação."""
+    headers = get_auth_headers(client, "catcomb@email.com")
+    _create(client, headers, description="Mercado", amount="10.00", category="Alimentação")
+    _create(client, headers, description="Farmácia", amount="5.00", category="Saúde")
+
+    from conftest import engine
+    from app import models
+    from sqlalchemy.orm import sessionmaker
+    from datetime import datetime, timezone as dt_tz
+
+    TestSess = sessionmaker(bind=engine)
+    sess = TestSess()
+    user = sess.query(models.User).filter(models.User.email == "catcomb@email.com").first()
+    tx = sess.query(models.Transaction).filter(
+        models.Transaction.user_id == user.id,
+        models.Transaction.description == "Mercado",
+    ).first()
+    # Data alvo: 01/03 02:00 UTC = 28/02 23:00 em SP (cruza o mês entre fuso).
+    tx.date = datetime(2026, 3, 1, 2, 0, tzinfo=dt_tz.utc)
+    sess.commit(); sess.close()
+
+    res = client.get(
+        "/transactions/categories",
+        params={
+            "category": "Alimentação",
+            "search": "Mercado",
+            "month": 2,
+            "year": 2026,
+            "timezone_name": "America/Sao_Paulo",
+        },
+        headers=headers,
+    )
+    # A transação criada (Mercado, Alimentação) com data movida para
+    # 28/02 23:00 SP é a única que casa com TODOS os filtros.
+    assert [(r["category"], r["total"]) for r in res.json()] == [("Alimentação", 10.00)]
+
+
+def test_categories_consistent_with_list_filters(client):
+    """Categorias deve derivar exatamente da listagem com os mesmos filtros."""
+    headers = get_auth_headers(client, "catcons@email.com")
+    _create(client, headers, description="Mercado", amount="10.00", category="Alimentação")
+    _create(client, headers, description="Farmácia", amount="5.00", category="Saúde")
+
+    params = {"category": "Saúde"}
+    listed = client.get("/transactions/", params=params, headers=headers).json()
+    cats = client.get("/transactions/categories", params=params, headers=headers).json()
+
+    assert len(listed) == 1
+    assert cats == [{"category": "Saúde", "total": 5.00}]
+
+
 # --- ANTI-ABUSO NO CADASTRO (M1) ---
 
 def test_register_rate_limit(client):

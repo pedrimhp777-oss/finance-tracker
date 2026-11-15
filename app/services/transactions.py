@@ -118,21 +118,20 @@ def expenses_by_category(
     user_id: int,
     month: int | None = None,
     year: int | None = None,
+    category: str | None = None,
+    search: str | None = None,
     timezone_name: str | None = None,
 ) -> list[dict[str, object]]:
     """Agrega despesas por categoria, sobre TODAS as transações filtradas.
 
-    Usa os mesmos critérios de período/resumo/exportação para garantir
-    consistência entre gráficos, cards e planilha.
+    Usa os mesmos critérios de período/resumo/exportação — incluindo os
+    filtros de categoria e busca — para garantir consistência entre gráficos,
+    cards e planilha.
     """
     has_period_filter = month is not None or year is not None
 
     if db.get_bind().dialect.name == "postgresql":
-        query = db.query(
-            models.Transaction.category,
-            func.sum(models.Transaction.amount),
-        ).filter(
-            models.Transaction.user_id == user_id,
+        query = _base_query(db, user_id, category, search).filter(
             models.Transaction.type == "expense",
         )
         if has_period_filter:
@@ -146,10 +145,10 @@ def expenses_by_category(
             .order_by(func.sum(models.Transaction.amount).desc())
             .all()
         )
-        return [{"category": category, "total": float(total)} for category, total in rows]
+        return [{"category": c, "total": float(total)} for c, total in rows]
 
     rows = (
-        _base_query(db, user_id, None, None)
+        _base_query(db, user_id, category, search)
         .filter(models.Transaction.type == "expense")
         .all()
     )
