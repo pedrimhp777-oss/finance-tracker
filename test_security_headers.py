@@ -336,7 +336,7 @@ def test_me_invalid_token_has_no_store(client):
 def test_me_expired_token_has_no_store(client):
     from datetime import datetime, timedelta, timezone
 
-    from jose import jwt
+    import jwt
 
     from app.security import ALGORITHM, SECRET_KEY
 
