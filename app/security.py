@@ -4,10 +4,13 @@ import time
 from collections import OrderedDict, deque
 from datetime import datetime, timedelta, timezone
 
+from typing import Any
+
+import jwt
+from jwt import InvalidTokenError
 from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
@@ -176,9 +179,10 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def create_access_token(data: dict) -> str:
-    to_encode = data.copy()
+    to_encode: dict[str, Any] = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     to_encode.update({"exp": expire})
+    # PyJWT serializa `exp` (datetime) como timestamp e exige `sub` string.
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
@@ -194,7 +198,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         if user_id is None:
             raise credentials_exception
         user = db.query(models.User).filter(models.User.id == int(user_id)).first()
-    except (JWTError, TypeError, ValueError):
+    except (InvalidTokenError, TypeError, ValueError):
         raise credentials_exception
 
     if user is None:

@@ -20,28 +20,35 @@ def test_get_me_invalid_token(client):
 
 
 def test_get_me_expired_token(client):
-    from jose import jwt
+    import jwt
+
+    from app.security import ALGORITHM, SECRET_KEY
 
     client.post(
         "/auth/register",
         json={"name": "Pedro", "email": "exp@email.com", "password": "password123"},
     )
+    # Assinatura VÁLIDA (mesma SECRET_KEY da app) com exp no passado:
+    # o 401 precisa vir da expiração, não de assinatura inválida.
     token = jwt.encode(
         {"sub": "1", "exp": 0},  # expirado em 1970
-        "test-only-secret-key-never-use-in-production",
-        algorithm="HS256",
+        SECRET_KEY,
+        algorithm=ALGORITHM,
     )
     res = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 401
 
 
 def test_get_me_missing_sub(client):
-    from jose import jwt
+    import jwt
 
+    from app.security import ALGORITHM, SECRET_KEY
+
+    # Assinatura válida, `exp` válido e `sub` ausente.
     token = jwt.encode(
         {"exp": 9999999999},
-        "test-only-secret-key-never-use-in-production",
-        algorithm="HS256",
+        SECRET_KEY,
+        algorithm=ALGORITHM,
     )
     res = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 401
