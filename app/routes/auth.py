@@ -10,14 +10,31 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
 def _client_ip(request: Request) -> str:
-    # Render/Vercel encaminham o IP real aqui.
-    return request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
-        request.client.host if request.client else "unknown"
-    )
+    # Atrás de proxy (Render/Vercel), cada proxy anexa o IP de quem conectou
+    # ao fim do X-Forwarded-For: o ÚLTIMO elemento é o adicionado pelo proxy
+    # de confiança e é o único que não pode ser forjado pelo cliente.
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        return forwarded.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"
 
 
 @router.post("/register", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
-def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
+def register_user(
+    request: Request,
+    user: schemas.UserCreate,
+    db: Session = Depends(get_db),
+):
+    # Limita o volume de cadastros por origem (anti-abuso/spam).
+    # Cada tentativa conta, mesmo com sucesso, pois o abuso é o volume.
+    try:
+        security.record_attempt(f"register:{_client_ip(request)}")
+    except security.RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Muitas tentativas. Tente novamente em alguns minutos.",
+        ) from exc
+
     db_user = db.query(models.User).filter(models.User.email == user.email).first()
     if db_user:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="E-mail já cadastrado")

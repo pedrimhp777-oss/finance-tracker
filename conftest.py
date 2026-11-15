@@ -39,6 +39,15 @@ def db():
         session.close()
         Base.metadata.drop_all(bind=engine)
 
+@pytest.fixture(autouse=True)
+def _clear_rate_limiter():
+    """Isola o estado do rate limiter entre testes (memória global do app)."""
+    from app import security
+    security._attempts.clear()
+    yield
+    security._attempts.clear()
+
+
 @pytest.fixture(scope="function")
 def client(db):
     def override_get_db():
