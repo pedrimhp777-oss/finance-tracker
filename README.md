@@ -110,6 +110,36 @@ tabela) e `tables` (as linhas). Detalhes que evitam perda silenciosa:
 > local protegido, **nunca** no Git. O diretório `backups/` já está no
 > `.gitignore`.
 
+## Monitoramento de erros (opcional)
+
+Sem `SENTRY_DSN`, a aplicação funciona exatamente como antes: nenhuma chamada
+de rede, nenhum overhead. Definindo a variável, erros 5xx passam a ser
+registrados com traceback — hoje eles morrem no log efêmero da Render.
+
+```bash
+SENTRY_DSN=https://<chave>@<org>.ingest.sentry.io/<projeto>
+SENTRY_ENVIRONMENT=production
+SENTRY_TRACES_SAMPLE_RATE=0   # 0 = sem tracing de performance
+```
+
+### O que **nunca** é enviado
+
+Esta é uma API financeira: o evento de erro não pode ser mais sensível que a
+aplicação. A proteção é em camadas (`app/observability.py`):
+
+| Camada | Efeito |
+|---|---|
+| `max_request_body_size="never"` | o SDK não coleta corpo de requisição |
+| `send_default_pii=False` | sem IP, cookies ou headers de usuário |
+| `before_send` | remove `data`, `cookies` e `query_string`; apaga `user` |
+| `before_breadcrumb` | limpa payloads em breadcrumbs HTTP/log |
+
+Headers mascarados: `Authorization`, `Cookie`, `X-CSRF-Token`, `X-API-Key`,
+`Proxy-Authorization`, `X-Auth-Token`.
+
+Na prática, um erro em `/auth/login` **não** leva a senha, e um erro em
+`/transactions` **não** leva descrição, categoria ou valor.
+
 ## Migrações (Alembic)
 ```bash
 # Ambiente novo (cria o schema completo):

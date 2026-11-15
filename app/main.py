@@ -17,9 +17,14 @@ from app.middleware import (
     SecurityHeadersMiddleware,
     is_sensitive_path,
 )
+from app.observability import init_sentry
 from app.routes import transactions, auth
 
 load_dotenv()
+
+# Monitoramento de erros: no-op se SENTRY_DSN nao estiver definido.
+# Chamado antes de criar o app para que falhas de import/warmup sejam vistas.
+init_sentry()
 
 # O esquema do banco é gerenciado EXCLUSIVAMENTE pelo Alembic.
 # Ambientes novos: `alembic upgrade head`. Bancos já existentes criados por
