@@ -54,19 +54,11 @@ def upgrade() -> None:
         sa.CheckConstraint("amount > 0", name="ck_transaction_amount_positive"),
     )
     op.create_index(op.f("ix_transactions_id"), "transactions", ["id"])
-    # Índices para as consultas mais comuns: por usuário e por data (listagem
-    # ordenada por data desc) e por usuário + tipo (resumo agregado).
-    op.create_index(
-        "ix_transactions_user_date", "transactions", ["user_id", "date"]
-    )
-    op.create_index(
-        "ix_transactions_user_type", "transactions", ["user_id", "type"]
-    )
+    # Índices de desempenho ficam na migração 0002, para que a produção
+    # (carimbada em 0001) possa aplicá-los com `alembic upgrade head`.
 
 
 def downgrade() -> None:
-    op.drop_index("ix_transactions_user_type", table_name="transactions")
-    op.drop_index("ix_transactions_user_date", table_name="transactions")
     op.drop_index(op.f("ix_transactions_id"), table_name="transactions")
     op.drop_table("transactions")
     op.drop_index(op.f("ix_users_email"), table_name="users")

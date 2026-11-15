@@ -1,5 +1,4 @@
 import os
-from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,26 +7,17 @@ from dotenv import load_dotenv
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.database import engine, Base, get_db
+from app.database import get_db
 from app.routes import transactions, auth
-from app.services import excel_export
 
 load_dotenv()
 
+# O esquema do banco é gerenciado EXCLUSIVAMENTE pelo Alembic.
+# Ambientes novos: `alembic upgrade head`. Bancos já existentes criados por
+# versões anteriores (via create_all): `alembic stamp head` + migrações
+# incrementais (ex.: 0002 para os índices de desempenho).
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Inicialização da aplicação.
-
-    A criação do schema aqui é idempotente (CREATE IF NOT EXISTS) e serve como
-    rede de segurança para ambientes simples. Em produção, a estrutura do banco
-    deve ser gerenciada pelo Alembic (ver app/../migrations).
-    """
-    Base.metadata.create_all(bind=engine)
-    yield
-
-
-app = FastAPI(title="Finance Tracker API", docs_url=None, redoc_url=None, lifespan=lifespan)
+app = FastAPI(title="Finance Tracker API", docs_url=None, redoc_url=None)
 
 
 # Declaração explícita das origens para permitir envio de tokens/credenciais

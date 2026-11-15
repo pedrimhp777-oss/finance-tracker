@@ -84,15 +84,18 @@ no ambiente (garantido pelo `conftest.py`, que sobrescreve `DATABASE_URL`).
 ## Migrações (Alembic)
 
 ```bash
-# Ambiente novo (cria o schema):
+# Ambiente novo (cria o schema completo):
 alembic upgrade head
 
-# Banco que já possui as tabelas (produção atual):
-alembic stamp head
+# Banco que já possui as tabelas (produção atual, criada via create_all):
+# 1) marca o estado atual como 0001 (apenas registra, não executa DDL):
+alembic stamp 0001_initial
+# 2) aplica as migrações incrementais (ex.: índices da 0002):
+alembic upgrade head
 ```
 
-A migração inicial está em `migrations/versions/0001_initial.py` e inclui
-índices de desempenho para as consultas mais comuns.
+A migração inicial está em `migrations/versions/0001_initial.py`; os índices
+de desempenho estão em `migrations/versions/0002_indexes.py`.
 
 ## Endpoints principais
 
