@@ -2,7 +2,11 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+
+# Segurança dos testes: o ambiente de teste SEMPRE usa SQLite em memória.
+# Sobrescrevemos (e nunca apenas "setdefault") para garantir que nenhum teste
+# acesse o banco configurado no ambiente (produção/Neon).
+os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ.setdefault("SECRET_KEY", "test-only-secret-key-never-use-in-production")
 
 import pytest
@@ -34,6 +38,15 @@ def db():
     finally:
         session.close()
         Base.metadata.drop_all(bind=engine)
+
+@pytest.fixture(autouse=True)
+def _clear_rate_limiter():
+    """Isola o estado do rate limiter entre testes (memória global do app)."""
+    from app import security
+    security._attempts.clear()
+    yield
+    security._attempts.clear()
+
 
 @pytest.fixture(scope="function")
 def client(db):

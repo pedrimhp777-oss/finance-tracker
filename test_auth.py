@@ -30,8 +30,9 @@ def test_register_duplicate_email(client):
     user_data = {"name": "Pedro", "email": "duplicado@email.com", "password": "password123"}
     client.post("/auth/register", json=user_data)
     
+    # 409 Conflict é o código correto para recurso duplicado.
     response = client.post("/auth/register", json=user_data)
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "já cadastrado" in response.json()["detail"].lower()
 
 def test_login_wrong_password(client):

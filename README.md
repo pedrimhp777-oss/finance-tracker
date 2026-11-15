@@ -1,41 +1,121 @@
-# Finance Tracker API
+# Finance Tracker — API
 
-API FastAPI para o Finance Tracker. Em produção, use PostgreSQL e configure os segredos por variáveis de ambiente.
+Backend do **Finance Tracker**, uma aplicação full-stack de controle financeiro
+pessoal. Esta API serve o frontend
+[`finance-tracker-front`](https://github.com/pedrimhp777-oss/finance-tracker-front)
+(hospedado na [Vercel](https://finance-tracker-front-pearl.vercel.app)).
 
-## Configuração local
+## Funcionalidades
 
-1. Crie um banco PostgreSQL local ou de desenvolvimento.
-2. Copie `.env.example` para `.env` e preencha `DATABASE_URL`, `SECRET_KEY` e `FRONTEND_URL`.
-3. Instale as dependências com `pip install -r requirements.txt`.
-4. Inicie a API com `uvicorn app.main:app --reload`.
+- 👤 Cadastro e login de usuários (JWT, senhas com bcrypt)
+- 💸 CRUD completo de transações (entradas/saídas)
+- 🔒 Isolamento total entre usuários (cada usuário acessa só os próprios dados)
+- 📊 Resumo financeiro agregado no banco (entradas, saídas, saldo)
+- 🗓️ Filtros por mês, ano, categoria e busca por descrição — com suporte a
+  fuso horário do usuário
+- 📥 Exportação do relatório em Excel (formatado, com sanitização anti-fórmula)
+- 🩺 Health check em `/health` e documentação interativa em `/docs` (Scalar)
+- 🚦 Rate limiting nas tentativas de login
 
-O servidor não inicia sem `DATABASE_URL` e `SECRET_KEY`. Gere uma chave forte com `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Não envie o arquivo `.env` ao GitHub.
+## Tecnologias
 
-## Configuração no Render
+- [FastAPI](https://fastapi.tiangolo.com/) + Pydantic v2
+- SQLAlchemy 2 + PostgreSQL ([Neon](https://neon.tech)) / SQLite para testes
+- JWT (`python-jose`) + bcrypt (`passlib`)
+- OpenPyXL para exportação Excel
+- Alembic para migrações versionadas
+- Uvicorn
 
-1. Crie um PostgreSQL gerenciado no mesmo workspace e região do serviço da API.
-2. Defina `DATABASE_URL` como a URL interna desse banco, `SECRET_KEY` como uma chave aleatória forte e `FRONTEND_URL` como o domínio de produção do Vercel.
-3. Configure o comando de inicialização como `uvicorn app.main:app --host 0.0.0.0 --port $PORT` e o health check como `/health`.
-4. Faça o deploy da API e confirme que `/health` responde com `{"status":"ok"}`.
+## Estrutura
 
-O código aceita os formatos `postgres://` e `postgresql://` do Render e os converte para o driver Psycopg 3.
+```
+app/
+├── main.py                  # Aplicação FastAPI, CORS, health e docs
+├── database.py              # Engine, sessões e Base declarativa
+├── models.py                # Modelos ORM (users, transactions)
+├── schemas.py               # Schemas Pydantic (validação de entrada/saída)
+├── security.py              # Hash de senha, JWT e rate limiting
+├── routes/
+│   ├── auth.py              # /auth/register, /auth/login, /auth/me
+│   └── transactions.py      # CRUD, /summary, /export/excel
+└── services/
+    ├── transactions.py      # Consultas com filtros/fuso e agregação do resumo
+    └── excel_export.py      # Geração da planilha
+migrations/                  # Migrações Alembic
+test_*.py                    # Suíte de testes (SQLite em memória isolado)
+```
 
-## Migrar dados do SQLite
+## Requisitos
 
-O script `migrate_sqlite_to_postgres.py` copia usuários e transações para um banco PostgreSQL vazio, preservando IDs e hashes de senha. Ele não altera nem apaga o SQLite de origem e interrompe a operação se o destino já tiver usuários ou transações.
+- Python 3.12+
 
-1. Baixe uma cópia segura do arquivo `finance.db` atual e mantenha um backup.
-2. Configure `DATABASE_URL` para o PostgreSQL de destino e instale as dependências.
-3. Execute `python migrate_sqlite_to_postgres.py C:\caminho\finance.db`.
-4. Confira as contagens de usuários e transações no destino antes de apontar o serviço de produção para o novo banco.
+## Instalação e execução local
 
-Não coloque `finance.db` no Git nem em arquivos compartilhados sem verificar se contém dados pessoais.
+```bash
+python -m venv .venv
+source .venv/Scripts/activate   # Windows Git Bash (Linux: .venv/bin/activate)
+pip install -r requirements.txt
+cp .env.example .env            # preencha as variáveis (ver abaixo)
+uvicorn app.main:app --reload
+```
 
-## Variáveis da API
+A API sobe em `http://localhost:8000` (documentação em `/docs`).
 
-- `DATABASE_URL`: URL de conexão PostgreSQL.
-- `SECRET_KEY`: segredo usado para assinar tokens JWT; não há chave padrão de produção.
-- `ALGORITHM`: algoritmo JWT (padrão `HS256`).
-- `ACCESS_TOKEN_EXPIRE_MINUTES`: duração dos tokens (padrão `30`).
-- `FRONTEND_URL`: origem de produção permitida pelo CORS.
+### Variáveis de ambiente (.env)
 
+| Variável | Descrição |
+|---|---|
+| `DATABASE_URL` | String de conexão PostgreSQL (ou SQLite). Ex: `postgresql://user:senha@host/db` |
+| `SECRET_KEY` | Segredo do JWT (mínimo 32 caracteres) |
+| `ALGORITHM` | Algoritmo JWT (padrão `HS256`) |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Expiração do token (padrão 30) |
+| `FRONTEND_URL` | Origem do frontend liberada no CORS |
+| `APP_ENV` | `development` libera também `localhost:5173` no CORS |
+
+## Testes
+
+```bash
+python -m pytest -q
+```
+
+Os testes **sempre** usam SQLite em memória, isolados do banco configurado
+no ambiente (garantido pelo `conftest.py`, que sobrescreve `DATABASE_URL`).
+
+## Migrações (Alembic)
+
+```bash
+# Ambiente novo (cria o schema completo):
+alembic upgrade head
+
+# Banco que já possui as tabelas (produção atual, criada via create_all):
+# 1) marca o estado atual como 0001 (apenas registra, não executa DDL):
+alembic stamp 0001_initial
+# 2) aplica as migrações incrementais (ex.: índices da 0002):
+alembic upgrade head
+```
+
+A migração inicial está em `migrations/versions/0001_initial.py`; os índices
+de desempenho estão em `migrations/versions/0002_indexes.py`.
+
+## Endpoints principais
+
+| Método | Rota | Descrição |
+|---|---|---|
+| POST | `/auth/register` | Cadastro (201; e-mail duplicado → 409) |
+| POST | `/auth/login` | Login (OAuth2 form; retorna JWT) |
+| GET | `/auth/me` | Dados do usuário autenticado |
+| POST | `/transactions/` | Criar transação |
+| GET | `/transactions/` | Listar com filtros (`month`, `year`, `category`, `search`, `timezone_name`, `skip`, `limit`) |
+| GET | `/transactions/summary` | Resumo financeiro agregado |
+| GET | `/transactions/export/excel` | Exportação Excel com os mesmos filtros |
+| PUT/DELETE | `/transactions/{id}` | Atualizar / excluir |
+
+## Deploy
+
+- Backend: [Render](https://render.com) (`uvicorn app.main:app`)
+- Banco: PostgreSQL no [Neon](https://neon.tech)
+- Frontend: [Vercel](https://vercel.com) — repositório
+  [`finance-tracker-front`](https://github.com/pedrimhp777-oss/finance-tracker-front)
+
+CI: GitHub Actions executa a suíte de testes e valida a migração Alembic
+em banco isolado a cada push/PR.
