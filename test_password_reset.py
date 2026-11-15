@@ -306,3 +306,84 @@ def test_log_de_configuracao_confirma_quando_presente(monkeypatch, caplog):
     # O endereço completo nunca aparece no log.
     assert "onboarding@resend.dev" not in caplog.text
     assert "***@resend.dev" in caplog.text
+
+
+# ------------------------------------------------------------------ Brevo
+
+def test_brevo_tem_preferencia_sobre_resend(monkeypatch):
+    """Brevo primeiro: permite verificar um endereço, sem exigir domínio."""
+    monkeypatch.setenv("BREVO_API_KEY", "xkeysib-teste")
+    monkeypatch.setenv("RESEND_API_KEY", "re_teste")
+    assert email_service.active_provider() == "brevo"
+
+
+def test_resend_e_usado_quando_nao_ha_brevo(monkeypatch):
+    monkeypatch.delenv("BREVO_API_KEY", raising=False)
+    monkeypatch.setenv("RESEND_API_KEY", "re_teste")
+    assert email_service.active_provider() == "resend"
+
+
+def test_sem_nenhuma_chave_nao_ha_provedor(monkeypatch):
+    monkeypatch.delenv("BREVO_API_KEY", raising=False)
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    assert email_service.active_provider() is None
+
+
+def test_brevo_envia_payload_e_header_corretos(monkeypatch):
+    monkeypatch.setenv("BREVO_API_KEY", "xkeysib-teste")
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.setenv("EMAIL_FROM", "Finance Tracker <no-reply@gmail.com>")
+    capturado = {}
+
+    class Resposta:
+        status_code = 201
+
+    def fake_post(url, **kwargs):
+        capturado["url"] = url
+        capturado["json"] = kwargs.get("json")
+        capturado["headers"] = kwargs.get("headers")
+        return Resposta()
+
+    monkeypatch.setattr(email_service.httpx, "post", fake_post)
+
+    assert send_password_reset_email("dest@email.com", "https://app/?reset_token=abc") is True
+
+    assert capturado["url"] == "https://api.brevo.com/v3/smtp/email"
+    assert capturado["headers"]["api-key"] == "xkeysib-teste"
+    assert capturado["json"]["sender"] == {
+        "name": "Finance Tracker",
+        "email": "no-reply@gmail.com",
+    }
+    assert capturado["json"]["to"] == [{"email": "dest@email.com"}]
+    # Brevo usa textContent/htmlContent (não text/html).
+    assert "textContent" in capturado["json"] and "htmlContent" in capturado["json"]
+    assert "reset_token=abc" in capturado["json"]["textContent"]
+
+
+def test_brevo_com_erro_nao_propaga(monkeypatch):
+    monkeypatch.setenv("BREVO_API_KEY", "xkeysib-teste")
+    monkeypatch.setenv("EMAIL_FROM", "no-reply@gmail.com")
+
+    class Resposta:
+        status_code = 401
+        text = ""
+
+        def json(self):
+            return {"message": "Key not found"}
+
+    monkeypatch.setattr(email_service.httpx, "post", lambda *a, **k: Resposta())
+    assert send_password_reset_email("dest@email.com", "https://app/?reset_token=abc") is False
+
+
+@pytest.mark.parametrize(
+    "bruto,esperado",
+    [
+        ("Finance Tracker <onboarding@resend.dev>", ("Finance Tracker", "onboarding@resend.dev")),
+        # Formato SEM <> que quebrou em produção: agora é tolerado.
+        ("Finance Tracker onboarding@resend.dev", ("Finance Tracker", "onboarding@resend.dev")),
+        ("a@b.com", ("Finance Tracker", "a@b.com")),
+        ("  Nome  < x@y.com >  ", ("Nome", "x@y.com")),
+    ],
+)
+def test_parser_do_remetente_tolera_formatos(bruto, esperado):
+    assert email_service._parse_sender(bruto) == esperado
