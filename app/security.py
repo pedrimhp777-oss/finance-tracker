@@ -7,12 +7,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import hmac
+import bcrypt
 import jwt
 from jwt import InvalidTokenError
 from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
-from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from app import config
@@ -94,7 +94,14 @@ SECRET_KEY = validate_secret_key(os.getenv("SECRET_KEY"))
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# bcrypt direto, sem passlib. O passlib 1.7.4 (última release, 2020) está
+# sem manutenção e QUEBRA com bcrypt >= 4.1: ele lê `bcrypt.__about__`, que foi
+# removido, e não lida com o limite de 72 bytes virar exceção. Manter passlib
+# obrigava a fixar bcrypt==4.0.1, bloqueando atualizações de segurança do
+# próprio bcrypt. A API usada aqui (`hashpw`/`checkpw`) é estável e os hashes
+# no formato `$2b$` gerados pelo passlib continuam válidos.
+BCRYPT_MAX_PASSWORD_BYTES = 72
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 # Variante que não falha sozinha: permite cair para o cookie de sessão.
 oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
@@ -203,11 +210,35 @@ def check_auth_rate_limit(key: str) -> None:
         if len(window) > _MAX_ATTEMPTS:
             raise RateLimitExceeded()
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    """Gera o hash bcrypt da senha.
+
+    Recusa explicitamente senhas acima de 72 bytes em vez de truncar: duas
+    senhas que diferem apenas depois do 72º byte produziriam o mesmo hash
+    (no bcrypt antigo o truncamento era silencioso).
+    """
+    payload = password.encode("utf-8")
+    if len(payload) > BCRYPT_MAX_PASSWORD_BYTES:
+        raise ValueError(
+            f"A senha excede o limite de {BCRYPT_MAX_PASSWORD_BYTES} bytes do bcrypt."
+        )
+    return bcrypt.hashpw(payload, bcrypt.gensalt()).decode("ascii")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    """Confere a senha contra o hash. Nunca levanta exceção: retorna False.
+
+    Hash corrompido, formato desconhecido ou senha acima de 72 bytes viram
+    falha de autenticação — não erro 500. Isso também preserva o tempo de
+    resposta: uma exceção vazaria que "aquele usuário" tem hash inválido.
+    """
+    if not plain_password or not hashed_password:
+        return False
+    try:
+        return bcrypt.checkpw(
+            plain_password.encode("utf-8"), hashed_password.encode("utf-8")
+        )
+    except (ValueError, TypeError):
+        return False
 
 
 def create_access_token(data: dict) -> str:

@@ -21,7 +21,7 @@ pessoal. Esta API serve o frontend
 
 - [FastAPI](https://fastapi.tiangolo.com/) + Pydantic v2
 - SQLAlchemy 2 + PostgreSQL ([Neon](https://neon.tech)) / SQLite para testes
-- JWT (`python-jose`) + bcrypt (`passlib`)
+- JWT (`PyJWT`) + senhas com `bcrypt` direto (sem `passlib`)
 - OpenPyXL para exportação Excel
 - Alembic para migrações versionadas
 - Uvicorn
