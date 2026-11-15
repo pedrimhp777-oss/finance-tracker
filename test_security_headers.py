@@ -193,16 +193,188 @@ def test_cors_headers_preserved_on_read(client):
         "/transactions/summary",
         "/transactions/categories",
         "/transactions/export/excel",
+        "/auth/login",
+        "/auth/register",
+        "/auth/me",
     ],
 )
-def test_sensitive_prefix_matches_all_financial_paths(path):
-    from app.middleware import SENSITIVE_PATH_PREFIXES
+def test_sensitive_path_matches_all_protected_routes(path):
+    from app.middleware import is_sensitive_path
 
-    assert path.startswith(SENSITIVE_PATH_PREFIXES)
+    assert is_sensitive_path(path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # Começam com /auth mas NÃO são as três rotas protegidas:
+        # correspondência exata evita proteger caminhos por engano.
+        "/auth",
+        "/auth/",
+        "/auth/login-extra",
+        "/auth/me/extra",
+        "/auth/register-v2",
+        "/authorization",
+        # Outras rotas não sensíveis:
+        "/health",
+        "/",
+        "/docs",
+        "/openapi.json",
+    ],
+)
+def test_auth_lookalike_paths_are_not_protected(path):
+    from app.middleware import is_sensitive_path
+
+    assert not is_sensitive_path(path)
 
 
 def test_non_financial_paths_are_out_of_scope():
-    from app.middleware import SENSITIVE_PATH_PREFIXES
+    from app.middleware import is_sensitive_path
 
-    for path in ("/health", "/", "/auth/login", "/auth/me", "/docs"):
-        assert not path.startswith(SENSITIVE_PATH_PREFIXES)
+    for path in ("/health", "/", "/docs", "/openapi.json"):
+        assert not is_sensitive_path(path)
+
+
+# ============================================================
+# ROTAS DE AUTENTICAÇÃO: token e dados pessoais
+# ============================================================
+
+def _register(client, email, password="password123", name="Pedro"):
+    return client.post(
+        "/auth/register",
+        json={"name": name, "email": email, "password": password},
+    )
+
+
+# --- /auth/register ---
+
+def test_register_success_has_no_store(client):
+    res = _register(client, "nostore-reg@email.com")
+    assert res.status_code == 201
+    assert res.headers["cache-control"] == NO_STORE
+    # Não deve vazar hash de senha na resposta.
+    assert "hashed_password" not in res.text
+    assert "password" not in res.json()
+
+
+def test_register_duplicate_email_has_no_store(client):
+    _register(client, "nostore-dup@email.com")
+    res = _register(client, "nostore-dup@email.com")
+    assert res.status_code == 409
+    assert res.headers["cache-control"] == NO_STORE
+
+
+def test_register_validation_error_has_no_store(client):
+    res = client.post(
+        "/auth/register",
+        json={"name": "X", "email": "nao-e-email", "password": "123"},
+    )
+    assert res.status_code == 422
+    assert res.headers["cache-control"] == NO_STORE
+
+
+# --- /auth/login ---
+
+def test_login_success_has_no_store(client):
+    _register(client, "nostore-login@email.com")
+    res = client.post(
+        "/auth/login",
+        data={"username": "nostore-login@email.com", "password": "password123"},
+    )
+    assert res.status_code == 200
+    assert res.headers["cache-control"] == NO_STORE
+    assert res.json()["access_token"]
+
+
+def test_login_wrong_password_has_no_store(client):
+    _register(client, "nostore-badpass@email.com")
+    res = client.post(
+        "/auth/login",
+        data={"username": "nostore-badpass@email.com", "password": "errada"},
+    )
+    assert res.status_code == 401
+    assert res.headers["cache-control"] == NO_STORE
+
+
+def test_login_unknown_user_has_no_store(client):
+    res = client.post(
+        "/auth/login", data={"username": "ninguem@email.com", "password": "x"}
+    )
+    assert res.status_code == 401
+    assert res.headers["cache-control"] == NO_STORE
+
+
+def test_login_missing_fields_has_no_store(client):
+    res = client.post("/auth/login", data={})
+    assert res.status_code == 422
+    assert res.headers["cache-control"] == NO_STORE
+
+
+# --- /auth/me ---
+
+def test_me_success_has_no_store(client):
+    headers = get_auth_headers(client, "nostore-me@email.com")
+    res = client.get("/auth/me", headers=headers)
+    assert res.status_code == 200
+    assert res.headers["cache-control"] == NO_STORE
+    assert res.json()["email"] == "nostore-me@email.com"
+    assert "hashed_password" not in res.text
+
+
+def test_me_without_token_has_no_store(client):
+    res = client.get("/auth/me")
+    assert res.status_code == 401
+    assert res.headers["cache-control"] == NO_STORE
+
+
+def test_me_invalid_token_has_no_store(client):
+    res = client.get("/auth/me", headers={"Authorization": "Bearer token-invalido"})
+    assert res.status_code == 401
+    assert res.headers["cache-control"] == NO_STORE
+
+
+def test_me_expired_token_has_no_store(client):
+    from datetime import datetime, timedelta, timezone
+
+    from jose import jwt
+
+    from app.security import ALGORITHM, SECRET_KEY
+
+    expired = jwt.encode(
+        {
+            "sub": "1",
+            "exp": datetime.now(timezone.utc) - timedelta(minutes=5),
+        },
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
+    res = client.get("/auth/me", headers={"Authorization": f"Bearer {expired}"})
+    assert res.status_code == 401
+    assert res.headers["cache-control"] == NO_STORE
+
+
+# --- CORS continua funcionando nas rotas de auth ---
+
+def test_cors_preserved_on_login(client):
+    _register(client, "nostore-cors-auth@email.com")
+    res = client.post(
+        "/auth/login",
+        data={"username": "nostore-cors-auth@email.com", "password": "password123"},
+        headers={"Origin": "http://localhost:5173"},
+    )
+    assert res.status_code == 200
+    assert res.headers["cache-control"] == NO_STORE
+    assert res.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+
+def test_cors_preflight_on_login_is_unaffected(client):
+    res = client.options(
+        "/auth/login",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert res.status_code == 200
+    assert res.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    assert res.headers.get("cache-control") != NO_STORE
