@@ -16,9 +16,75 @@ from app.database import get_db
 
 load_dotenv()
 
-SECRET_KEY = os.getenv("SECRET_KEY")
-if not SECRET_KEY or len(SECRET_KEY) < 32:
-    raise RuntimeError("SECRET_KEY precisa ter ao menos 32 caracteres para iniciar a API.")
+# --- Validação de força da SECRET_KEY -----------------------------------
+# IMPORTANTE: estas checagens rejeitam chaves OBVIAMENTE fracas (curtas,
+# vazias, placeholders, repetitivas). Elas NÃO medem entropia criptográfica
+# real — nenhuma verificação estática mede. A chave deve ser gerada por um
+# CSPRNG, por exemplo:
+#
+#     python -c "import secrets; print(secrets.token_urlsafe(48))"
+#
+# Nenhum valor de chave é registrado em log ou incluído em mensagens de erro.
+MIN_SECRET_KEY_LENGTH = 32
+# Poucos caracteres distintos indica chave previsível ("aaaa...", "12341234...").
+MIN_DISTINCT_CHARACTERS = 8
+# Valores que aparecem em exemplos/documentação e NUNCA devem ir a produção.
+_PLACEHOLDER_MARKERS = (
+    "generate-a-long-random",
+    "your-secret-key",
+    "your_secret_key",
+    "changeme",
+    "change-me",
+    "change_me",
+    "not-for-production",
+    "never-use-in-production",
+    "never_use_in_production",
+    "test-only",
+    "ci-only",
+    "secret-key-here",
+    "replace-me",
+    "replace_me",
+    "placeholder",
+    "example-secret",
+    "supersecret",
+)
+
+
+def validate_secret_key(value: str | None) -> str:
+    """Valida a força mínima da SECRET_KEY e devolve o valor original.
+
+    Não altera nem substitui a chave: apenas rejeita valores inaceitáveis.
+    As mensagens nunca contêm a chave, só a regra violada.
+    """
+    if not value or not value.strip():
+        raise RuntimeError(
+            "SECRET_KEY precisa estar definida e não pode ser vazia ou conter "
+            "apenas espaços."
+        )
+    if len(value) < MIN_SECRET_KEY_LENGTH:
+        raise RuntimeError(
+            f"SECRET_KEY precisa ter ao menos {MIN_SECRET_KEY_LENGTH} caracteres."
+        )
+    lowered = value.lower()
+    for marker in _PLACEHOLDER_MARKERS:
+        if marker in lowered:
+            raise RuntimeError(
+                "SECRET_KEY parece um valor de exemplo/placeholder. Gere uma "
+                'chave real com: python -c "import secrets; '
+                'print(secrets.token_urlsafe(48))"'
+            )
+    if len(set(value)) < MIN_DISTINCT_CHARACTERS:
+        raise RuntimeError(
+            "SECRET_KEY parece fraca: poucos caracteres distintos. Gere uma "
+            'chave real com: python -c "import secrets; '
+            'print(secrets.token_urlsafe(48))"'
+        )
+    return value
+
+
+# A chave é lida e validada uma única vez, no import do módulo: se for
+# inaceitável, a API não inicia.
+SECRET_KEY = validate_secret_key(os.getenv("SECRET_KEY"))
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 
