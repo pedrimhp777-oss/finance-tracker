@@ -19,6 +19,7 @@ from app.middleware import (
 )
 from app.observability import init_sentry
 from app.services.email import log_email_configuration
+from app.startup_diagnostics import log_security_configuration
 from app.validation import validation_exception_handler
 from app.routes import transactions, auth
 
@@ -32,6 +33,9 @@ init_sentry()
 # Deixa visivel no log se o envio de e-mail esta configurado (a rota de
 # recuperacao responde 202 mesmo sem provedor, por design).
 log_email_configuration()
+
+# Idem para as opcoes de seguranca que degradam em silencio (rate limit por IP).
+log_security_configuration()
 
 # O esquema do banco é gerenciado EXCLUSIVAMENTE pelo Alembic.
 # Ambientes novos: `alembic upgrade head`. Bancos já existentes criados por
