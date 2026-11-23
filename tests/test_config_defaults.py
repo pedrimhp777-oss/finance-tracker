@@ -8,7 +8,7 @@ import pathlib
 import subprocess
 import sys
 
-REPO_ROOT = pathlib.Path(__file__).parent.resolve()
+REPO_ROOT = pathlib.Path(__file__).parent.parent.resolve()
 
 
 def _run(code: str, env: dict[str, str] | None = None, cwd: pathlib.Path | None = None):

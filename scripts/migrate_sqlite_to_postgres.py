@@ -5,8 +5,13 @@ The SQLite source is read only; this script does not delete or modify it.
 """
 
 import argparse
+import sys
 from datetime import timezone
 from pathlib import Path
+
+# Rodando como `python scripts/migrate_sqlite_to_postgres.py`, o sys.path[0] é
+# `scripts/` e `import app` falharia. A raiz do repositório entra na frente.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import create_engine, select, text
 

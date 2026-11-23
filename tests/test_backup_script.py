@@ -23,7 +23,7 @@ from sqlalchemy import create_engine, text
 
 from conftest import TEST_DATABASE_URL
 
-REPO_ROOT = pathlib.Path(__file__).parent.resolve()
+REPO_ROOT = pathlib.Path(__file__).parent.parent.resolve()
 _SPEC = importlib.util.spec_from_file_location(
     "backup_script", REPO_ROOT / "scripts" / "backup.py"
 )

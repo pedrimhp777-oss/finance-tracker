@@ -108,6 +108,27 @@ foi removido: banco criado por código diverge do banco de produção silenciosa
 
 > `GET /docs` e `/openapi.json` ficam **desativados** quando `APP_ENV=production`.
 
+### Erros de validação
+
+O corpo de um `422` segue o formato do FastAPI (`detail` é uma lista com
+`loc`, `msg` e `type`), mas as mensagens são traduzidas em `app/validation.py`:
+
+```json
+{
+  "detail": [
+    { "loc": ["body", "password"],
+      "msg": "Senha: deve ter no mínimo 8 caracteres",
+      "type": "string_too_short" }
+  ]
+}
+```
+
+O Pydantic responde em inglês ("String should have at least 8 characters") e
+esse texto ia direto para a tela de um app em português. Traduzir no cliente
+seria frágil: a mensagem nasce no servidor, com `ctx` variável (`min_length`,
+`gt`, `max_digits`). Tipos sem tradução caem em "valor inválido" — nunca no
+original em inglês. `type` continua intacto para quem programa contra a API.
+
 ## Autenticação
 
 ### `Authorization: Bearer`
@@ -308,12 +329,17 @@ A suíte roda contra um **PostgreSQL real**, o mesmo motor da produção.
 aplica as migrações com `alembic upgrade head` e limpa as tabelas entre os
 testes. Nenhum teste toca o banco de produção.
 
+Os testes ficam em `tests/`. O `conftest.py` continua na raiz de propósito: é
+ele que define `DATABASE_URL` e `BCRYPT_ROUNDS` **antes** de qualquer import da
+aplicação — `app.config` lê o ambiente no import, então um `conftest.py` dentro
+de `tests/` chegaria tarde em parte dos caminhos de coleta.
+
 Até o B1 a suíte rodava em SQLite em memória. Além de testar outro motor, isso
 obrigava o serviço a manter dois caminhos de consulta — e deixava justamente o
 caminho de produção sem cobertura. Foi assim que um `GROUP BY` inválido passou
 pelos testes e só quebrou no deploy.
 
-| Arquivo | Cobre |
+| Arquivo (em `tests/`) | Cobre |
 |---|---|
 | `test_auth`, `test_auth_security` | cadastro, login, senha errada, token inválido |
 | `test_transactions`, `test_transactions_filters` | CRUD, filtros, paginação, **isolamento entre usuários** |

@@ -129,7 +129,7 @@ def test_module_import_fails_without_valid_secret_key(tmp_path):
     import subprocess
     import sys
 
-    repo_root = str(pathlib.Path(__file__).parent.resolve())
+    repo_root = str(pathlib.Path(__file__).parent.parent.resolve())
     env = dict(os.environ)
     env.pop("SECRET_KEY", None)
     env["DATABASE_URL"] = TEST_DATABASE_URL
@@ -154,7 +154,7 @@ def test_module_import_fails_with_placeholder_key(tmp_path):
     import subprocess
     import sys
 
-    repo_root = str(pathlib.Path(__file__).parent.resolve())
+    repo_root = str(pathlib.Path(__file__).parent.parent.resolve())
     env = dict(os.environ)
     env["DATABASE_URL"] = TEST_DATABASE_URL
     env["SECRET_KEY"] = "generate-a-long-random-secret-before-deploying"

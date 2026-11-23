@@ -22,7 +22,7 @@ from app.middleware import NO_STORE_HEADER
 from test_transactions import get_auth_headers
 
 NO_STORE = "no-store"
-REPO_ROOT = str(pathlib.Path(__file__).parent.resolve())
+REPO_ROOT = str(pathlib.Path(__file__).parent.parent.resolve())
 
 
 def _legacy_hs256_token(payload: dict, key: str) -> str:
