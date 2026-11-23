@@ -105,6 +105,27 @@ foi removido: banco criado por código diverge do banco de produção silenciosa
 
 > `GET /docs` e `/openapi.json` ficam **desativados** quando `APP_ENV=production`.
 
+### Erros de validação
+
+O corpo de um `422` segue o formato do FastAPI (`detail` é uma lista com
+`loc`, `msg` e `type`), mas as mensagens são traduzidas em `app/validation.py`:
+
+```json
+{
+  "detail": [
+    { "loc": ["body", "password"],
+      "msg": "Senha: deve ter no mínimo 8 caracteres",
+      "type": "string_too_short" }
+  ]
+}
+```
+
+O Pydantic responde em inglês ("String should have at least 8 characters") e
+esse texto ia direto para a tela de um app em português. Traduzir no cliente
+seria frágil: a mensagem nasce no servidor, com `ctx` variável (`min_length`,
+`gt`, `max_digits`). Tipos sem tradução caem em "valor inválido" — nunca no
+original em inglês. `type` continua intacto para quem programa contra a API.
+
 ## Autenticação
 
 ### `Authorization: Bearer`
