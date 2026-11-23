@@ -1,6 +1,7 @@
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from urllib.parse import quote
 
 from fastapi import (
@@ -9,6 +10,7 @@ from fastapi import (
     Depends,
     HTTPException,
     Request,
+    Response,
     status,
 )
 from fastapi.security import OAuth2PasswordRequestForm
@@ -166,6 +168,105 @@ def logout(
 @router.get("/me", response_model=schemas.UserResponse)
 def get_me(current_user: models.User = Depends(security.get_current_user)):
     return current_user
+
+
+@router.get("/me/export")
+def export_my_data(
+    response: Response,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(security.get_current_user),
+):
+    """Exporta todos os dados do usuário em JSON (portabilidade — LGPD art. 18).
+
+    Inclui o que a aplicação guarda sobre a pessoa, exceto o hash da senha:
+    ele não é um dado do titular, é credencial interna de verificação.
+    Valores monetários vão como string para não perder centavos no JSON.
+    """
+    transactions = (
+        db.query(models.Transaction)
+        .filter(models.Transaction.user_id == current_user.id)
+        .order_by(models.Transaction.date.asc(), models.Transaction.id.asc())
+        .all()
+    )
+    total_income = sum(
+        (t.amount for t in transactions if t.type == "income"), Decimal("0")
+    )
+    total_expense = sum(
+        (t.amount for t in transactions if t.type == "expense"), Decimal("0")
+    )
+
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="finance-tracker-dados-{current_user.id}.json"'
+    )
+    return {
+        "format_version": 1,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "user": {
+            "id": current_user.id,
+            "name": current_user.name,
+            "email": current_user.email,
+            "created_at": (
+                current_user.created_at.isoformat()
+                if current_user.created_at
+                else None
+            ),
+        },
+        "summary": {
+            "transactions": len(transactions),
+            "total_income": str(total_income),
+            "total_expense": str(total_expense),
+            "balance": str(total_income - total_expense),
+        },
+        "transactions": [
+            {
+                "id": t.id,
+                "description": t.description,
+                "amount": str(t.amount),
+                "type": t.type,
+                "category": t.category,
+                "date": t.date.isoformat() if t.date else None,
+            }
+            for t in transactions
+        ],
+    }
+
+
+@router.delete("/me", status_code=status.HTTP_204_NO_CONTENT)
+def delete_account(
+    request: Request,
+    payload: schemas.DeleteAccountRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(security.get_current_user),
+):
+    """Exclui a conta e todos os seus dados, sem possibilidade de volta.
+
+    Exige a senha porque um token vazado (o JWT vive no `localStorage`) não
+    pode apagar a conta sozinho. Senha errada devolve **403**, não 401: o
+    frontend trata 401 em rota autenticada como sessão expirada e deslogaria
+    o usuário no meio da operação.
+
+    As transações e os tokens de redefinição somem por `ON DELETE CASCADE`
+    (migração 0005), então não há como sobrar dado órfão.
+    """
+    ip = _client_ip(request)
+    try:
+        # Sem limite, este endpoint virava um oráculo para testar senhas.
+        security.record_attempt(f"delete:{ip}:{current_user.id}")
+    except security.RateLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Muitas tentativas. Tente novamente em alguns minutos.",
+        ) from exc
+
+    if not security.verify_password(payload.password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Senha incorreta.",
+        )
+
+    db.delete(current_user)
+    db.commit()
+    return None
 
 
 # ---------------------------------------------------------------------------

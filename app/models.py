@@ -18,7 +18,15 @@ class User(Base):
     )
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
 
-    transactions = relationship("Transaction", back_populates="owner")
+    # `passive_deletes=True`: ao excluir a conta, o banco aplica o ON DELETE
+    # CASCADE da FK. Sem isso o SQLAlchemy tentaria `UPDATE transactions SET
+    # user_id = NULL` antes do DELETE e esbarraria no NOT NULL.
+    transactions = relationship(
+        "Transaction",
+        back_populates="owner",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class Transaction(Base):
@@ -33,7 +41,12 @@ class Transaction(Base):
     date = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
     
     # user_id configurado como não nulo
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     owner = relationship("User", back_populates="transactions")
 
 

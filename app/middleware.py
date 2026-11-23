@@ -21,7 +21,7 @@ SENSITIVE_PATH_PREFIXES: tuple[str, ...] = ("/transactions",)
 #   - /auth/me       -> devolve dados pessoais do usuário
 #   - /auth/logout   -> ação de sessão (mesma família de proteção)
 SENSITIVE_EXACT_PATHS: frozenset[str] = frozenset(
-    {"/auth/login", "/auth/register", "/auth/me", "/auth/logout"}
+    {"/auth/login", "/auth/register", "/auth/me", "/auth/me/export", "/auth/logout"}
 )
 
 NO_STORE_HEADER = "no-store"

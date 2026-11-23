@@ -135,3 +135,14 @@ class CategorySummary(BaseModel):
 
     category: str
     total: float
+
+
+class DeleteAccountRequest(BaseModel):
+    """Exclusão de conta exige a senha: um token vazado não basta.
+
+    O token vive no `localStorage` e, em caso de XSS, poderia ser usado sem que
+    o dono percebesse. Pedir a senha força prova de posse do fator que só o
+    usuário conhece.
+    """
+
+    password: str = Field(min_length=1, max_length=200)
