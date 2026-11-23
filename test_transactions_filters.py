@@ -281,7 +281,7 @@ def test_create_transaction_without_date_uses_now(client):
     res = _create(client, headers)
     assert res.status_code == 201
     got = datetime.fromisoformat(res.json()["date"].replace("Z", "+00:00"))
-    # SQLite persiste sem fuso (o banco de teste é naive); trata como UTC.
+    # O banco grava UTC; normaliza caso a serialização venha naive.
     if got.tzinfo is None:
         got = got.replace(tzinfo=timezone.utc)
     after = datetime.now(timezone.utc)
@@ -528,24 +528,16 @@ def test_categories_requires_auth(client):
     assert res.status_code == 401
 
 
-def test_categories_postgres_sql_group_by_is_valid():
-    """Regressão do bug de produção: no caminho PostgreSQL a agregação deve
-    selecionar apenas colunas presentes no GROUP BY.
+def test_categories_sql_group_by_is_valid(db):
+    """Regressão do bug de produção: a agregação deve selecionar apenas
+    colunas presentes no GROUP BY (o PostgreSQL rejeita o contrário).
 
-    Compila a query no dialeto PostgreSQL (sem conectar) e valida o SQL.
+    Compila a query do serviço no dialeto PostgreSQL e valida o SQL gerado.
     """
-    import os as _os
-    from sqlalchemy import create_engine
     from sqlalchemy.dialects import postgresql
-    from sqlalchemy.orm import sessionmaker
     from app import models
-    from app.services import transactions as svc
 
-    engine = create_engine("sqlite:///:memory:")
-    Sess = sessionmaker(bind=engine)
-    db = Sess()
-
-    # Reproduz exatamente a query do caminho PostgreSQL do serviço.
+    # Reproduz exatamente a query do serviço.
     query = db.query(
         models.Transaction.category,
         func.sum(models.Transaction.amount),
@@ -562,7 +554,6 @@ def test_categories_postgres_sql_group_by_is_valid():
     # transactions.id/description sem agregacao nem GROUP BY.
     assert "transactions.description" not in sql.lower()
     assert "transactions.id" not in sql.lower()
-    db.close()
 
 
 def test_categories_with_category_filter(client):

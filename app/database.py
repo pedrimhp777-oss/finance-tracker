@@ -17,12 +17,7 @@ if DATABASE_URL.startswith("postgres://"):
 elif DATABASE_URL.startswith("postgresql://"):
     DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
 
-engine_options = {"pool_pre_ping": True}
-if DATABASE_URL.startswith("sqlite"):
-    # SQLite fica disponível para o banco em memória dos testes.
-    engine_options["connect_args"] = {"check_same_thread": False}
-
-engine = create_engine(DATABASE_URL, **engine_options)
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 # Cria a fábrica de sessões do banco
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

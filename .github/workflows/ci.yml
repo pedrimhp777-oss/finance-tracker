@@ -12,6 +12,29 @@ jobs:
     defaults:
       run:
         working-directory: ./
+
+    # PostgreSQL real, a mesma engine da produção. Até o B1 a suíte rodava em
+    # SQLite em memória, o que obrigava o serviço a manter dois caminhos de
+    # consulta — e deixava o caminho de produção sem teste (foi assim que um
+    # GROUP BY inválido escapou para o deploy).
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: finance_tracker_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/finance_tracker_test
+
     steps:
       - uses: actions/checkout@v4
 
@@ -24,12 +47,19 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run tests (banco isolado em memória)
+      - name: Run tests (PostgreSQL real)
         env:
           SECRET_KEY: 6d02a011eff5d1c0f15a4f48129f6b53ae4d38a6494d537437388976e49b9f14
         run: python -m pytest -q
 
-      - name: Validate Alembic migration in isolated SQLite
+      # Banco separado: valida as migrações do zero, do jeito que o deploy faz.
+      # O job de testes já migra o seu próprio banco, então repetir ali seria
+      # um no-op — aqui é uma base limpa.
+      - name: Validate Alembic migrations on a clean database
         env:
-          DATABASE_URL: sqlite:////tmp/ci-migration-test.db
-        run: alembic upgrade head
+          PGPASSWORD: postgres
+          DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/finance_tracker_migration_test
+        run: |
+          psql -h localhost -U postgres -c "CREATE DATABASE finance_tracker_migration_test"
+          alembic upgrade head
+          alembic downgrade base

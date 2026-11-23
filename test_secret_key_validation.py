@@ -7,6 +7,7 @@ estáticas implementadas em `app.security.validate_secret_key`.
 import secrets
 
 import pytest
+from conftest import TEST_DATABASE_URL
 
 from app.security import (
     MIN_DISTINCT_CHARACTERS,
@@ -131,7 +132,7 @@ def test_module_import_fails_without_valid_secret_key(tmp_path):
     repo_root = str(pathlib.Path(__file__).parent.resolve())
     env = dict(os.environ)
     env.pop("SECRET_KEY", None)
-    env["DATABASE_URL"] = "sqlite:///:memory:"
+    env["DATABASE_URL"] = TEST_DATABASE_URL
     env["PYTHONPATH"] = repo_root
 
     result = subprocess.run(
@@ -155,7 +156,7 @@ def test_module_import_fails_with_placeholder_key(tmp_path):
 
     repo_root = str(pathlib.Path(__file__).parent.resolve())
     env = dict(os.environ)
-    env["DATABASE_URL"] = "sqlite:///:memory:"
+    env["DATABASE_URL"] = TEST_DATABASE_URL
     env["SECRET_KEY"] = "generate-a-long-random-secret-before-deploying"
     env["PYTHONPATH"] = repo_root
 

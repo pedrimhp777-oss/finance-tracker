@@ -6,12 +6,14 @@ gráficos de categoria e exportação.
 
 Estratégia de datas:
 - Os instantes são armazenados em UTC (DateTime(timezone=True)).
-- No PostgreSQL, a conversão para o fuso do usuário acontece no banco
-  (func.timezone), garantindo filtros por mês/ano corretos perto da virada.
-- Em outros dialetos (SQLite nos testes), o filtro por período é aplicado
-  em Python após a busca e a paginação é aplicada em memória (volume pequeno).
+- A conversão para o fuso do usuário acontece no banco (func.timezone), o que
+  mantém filtros por mês/ano corretos perto da virada do dia.
+
+Um único caminho, PostgreSQL. Até o B1 existia um segundo caminho para SQLite
+(filtro em Python + paginação em memória) porque a suíte rodava em memória;
+além de dobrar o código, ele deixava o caminho de produção sem teste — foi
+assim que um GROUP BY inválido escapou e quebrou o deploy.
 """
-from datetime import timezone as dt_timezone
 from decimal import Decimal
 
 from sqlalchemy import extract, func
@@ -27,24 +29,6 @@ def resolve_timezone(timezone_name: str | None) -> ZoneInfo:
         return ZoneInfo(timezone_name or "UTC")
     except (ZoneInfoNotFoundError, ValueError, KeyError):
         raise ValueError("Fuso horário inválido")
-
-
-def _in_selected_period(
-    transaction: models.Transaction,
-    client_timezone: ZoneInfo,
-    month: int | None,
-    year: int | None,
-    day: int | None = None,
-) -> bool:
-    value = transaction.date
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=dt_timezone.utc)
-    local_value = value.astimezone(client_timezone)
-    return (
-        (month is None or local_value.month == month)
-        and (year is None or local_value.year == year)
-        and (day is None or local_value.day == day)
-    )
 
 
 def _base_query(
@@ -96,36 +80,20 @@ def filtered_transactions(
 ) -> list[models.Transaction]:
     """Busca transações do usuário com filtros opcionais.
 
-    No PostgreSQL a paginação é feita no banco (OFFSET/LIMIT). Em dialetos sem
-    suporte ao filtro por fuso (SQLite nos testes), o período é filtrado em
-    Python e a paginação é aplicada sobre o resultado filtrado.
+    Filtro de período e paginação (OFFSET/LIMIT) acontecem no banco.
     """
     query = _base_query(db, user_id, category, search)
     query = query.order_by(
         models.Transaction.date.desc(), models.Transaction.id.desc()
     )
 
-    has_period_filter = month is not None or year is not None or day is not None
-
-    if db.get_bind().dialect.name == "postgresql":
-        if has_period_filter:
-            query = _period_in_sql(db, query, month, year, timezone_name, day)
-        if skip:
-            query = query.offset(skip)
-        if limit is not None:
-            query = query.limit(limit)
-        return query.all()
-
-    rows = query.all()
-    if has_period_filter:
-        client_timezone = resolve_timezone(timezone_name)
-        rows = [
-            t for t in rows
-            if _in_selected_period(t, client_timezone, month, year, day)
-        ]
-    if limit is None:
-        return rows[skip:]
-    return rows[skip : skip + limit]
+    if month is not None or year is not None or day is not None:
+        query = _period_in_sql(db, query, month, year, timezone_name, day)
+    if skip:
+        query = query.offset(skip)
+    if limit is not None:
+        query = query.limit(limit)
+    return query.all()
 
 
 def expenses_by_category(
@@ -146,50 +114,29 @@ def expenses_by_category(
     """
     has_period_filter = month is not None or year is not None or day is not None
 
-    if db.get_bind().dialect.name == "postgresql":
-        # Agregação seleciona apenas colunas (categoria + soma). NÃO usar a
-        # query de entidade aqui: SELECT de colunas não agrupadas com
-        # GROUP BY é rejeitado pelo PostgreSQL (no SQLite não dá erro,
-        # o que esconderia o bug nos testes).
-        query = db.query(
-            models.Transaction.category,
-            func.sum(models.Transaction.amount),
-        ).filter(
-            models.Transaction.user_id == user_id,
-            models.Transaction.type == "expense",
-        )
-        if category:
-            query = query.filter(models.Transaction.category == category)
-        if search:
-            query = query.filter(models.Transaction.description.ilike(f"%{search.strip()}%"))
-        if has_period_filter:
-            query = _period_in_sql(db, query, month, year, timezone_name, day)
-        rows = (
-            query.group_by(models.Transaction.category)
-            .order_by(func.sum(models.Transaction.amount).desc())
-            .all()
-        )
-        return [{"category": c, "total": float(total)} for c, total in rows]
-
+    # A agregação seleciona apenas colunas (categoria + soma). NÃO usar a query
+    # de entidade aqui: SELECT de colunas não agrupadas junto com GROUP BY é
+    # rejeitado pelo PostgreSQL. Foi exatamente esse o bug que só apareceu no
+    # deploy, quando os testes ainda rodavam em SQLite (que aceita a query).
+    query = db.query(
+        models.Transaction.category,
+        func.sum(models.Transaction.amount),
+    ).filter(
+        models.Transaction.user_id == user_id,
+        models.Transaction.type == "expense",
+    )
+    if category:
+        query = query.filter(models.Transaction.category == category)
+    if search:
+        query = query.filter(models.Transaction.description.ilike(f"%{search.strip()}%"))
+    if has_period_filter:
+        query = _period_in_sql(db, query, month, year, timezone_name, day)
     rows = (
-        _base_query(db, user_id, category, search)
-        .filter(models.Transaction.type == "expense")
+        query.group_by(models.Transaction.category)
+        .order_by(func.sum(models.Transaction.amount).desc())
         .all()
     )
-    if has_period_filter:
-        client_timezone = resolve_timezone(timezone_name)
-        rows = [
-            t for t in rows
-            if _in_selected_period(t, client_timezone, month, year, day)
-        ]
-
-    totals: dict[str, Decimal] = {}
-    for t in rows:
-        totals[t.category] = totals.get(t.category, Decimal("0")) + t.amount
-    return [
-        {"category": category, "total": float(total)}
-        for category, total in sorted(totals.items(), key=lambda kv: -kv[1])
-    ]
+    return [{"category": c, "total": float(total)} for c, total in rows]
 
 
 def summary_for(
@@ -222,21 +169,7 @@ def summary_for(
                 models.Transaction.description.ilike(f"%{search.strip()}%")
             )
         if month is not None or year is not None or day is not None:
-            if db.get_bind().dialect.name == "postgresql":
-                query = _period_in_sql(db, query, month, year, timezone_name, day)
-            else:
-                client_timezone = resolve_timezone(timezone_name)
-                transactions_in_period = [
-                    t.id
-                    for t in db.query(models.Transaction).filter(
-                        models.Transaction.user_id == user_id,
-                        models.Transaction.type == transaction_type,
-                    )
-                    if _in_selected_period(t, client_timezone, month, year, day)
-                ]
-                query = query.filter(
-                    models.Transaction.id.in_(transactions_in_period or [0])
-                )
+            query = _period_in_sql(db, query, month, year, timezone_name, day)
 
         return query.scalar() or Decimal("0")
 

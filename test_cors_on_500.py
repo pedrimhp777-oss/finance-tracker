@@ -27,8 +27,8 @@ NOT_ALLOWED = "https://evil.example"
 def raw_client(client):
     """Cliente que devolve a resposta 500 em vez de re-lançar a exceção.
 
-    Depende de `client` só para garantir que o override de `get_db` (SQLite
-    em memória) esteja ativo enquanto o 500 é provocado.
+    Depende de `client` só para garantir que o override de `get_db` (Postgres
+    de teste) esteja ativo enquanto o 500 é provocado.
     """
     return TestClient(app, raise_server_exceptions=False)
 
