@@ -80,7 +80,7 @@ foi removido: banco criado por código diverge do banco de produção silenciosa
 - CRUD de transações com isolamento por usuário
 - Resumo financeiro (entradas, saídas, saldo) agregado no banco
 - Filtros por mês, ano, **dia**, categoria e busca — aplicados no servidor
-- Paginação em SQL (com fallback em Python para SQLite nos testes)
+- Paginação e filtro de período em SQL, no servidor
 - Exportação **Excel** respeitando exatamente os filtros e o fuso do cliente
 
 ## Endpoints
@@ -189,14 +189,14 @@ PASSWORD_RESET_TTL_MINUTES=30
 |---|---|
 | Senhas | bcrypt 5.0 direto (custo 12); senhas > 72 bytes recusadas, não truncadas |
 | Chave de assinatura | validada no boot: rejeita vazia, `placeholder`, `< 32` chars e `< 8` chars distintos |
-| Rate limiting | janela deslizante 10 / 5 min por `ip:email`; LRU com teto de 10k chaves |
+| Rate limiting | 3 buckets por janela deslizante de 5 min: `ip:email` (10), e-mail (20) e IP (60); LRU com teto de 10k chaves |
 | Cache | `Cache-Control: no-store` em `/transactions*` e nas rotas de auth |
 | MIME | `X-Content-Type-Options: nosniff` em toda resposta |
 | CORS | allowlist explícita, **inclusive nas respostas de erro 500** |
 | Erros | `500` genérico, sem stack trace nem detalhes internos |
 | Documentação | `/docs` e `/openapi.json` fechados em produção |
 | Isolamento | toda consulta filtrada por `user_id`; acesso indevido devolve `404` (não `403`) |
-| Enumeração | `forgot-password` e `register` não revelam contas existentes |
+| Enumeração | login roda o bcrypt mesmo para e-mail inexistente (hash falso de mesmo custo) e `forgot-password` envia fora do caminho da resposta — o tempo não denuncia contas. `register` devolve `409` de propósito (UX > sigilo de existência) |
 | Segredos | `.env` fora do Git; nenhuma credencial no histórico |
 
 **Detalhe que costuma passar:** o `ServerErrorMiddleware` do Starlette roda
@@ -288,11 +288,22 @@ descrição nem categoria.
 ## Testes
 
 ```bash
+# Uma vez: cria o banco de teste (vazio)
+createdb finance_tracker_test
+
 python -m pytest -q          # 261 testes
 ```
 
-Sempre contra **SQLite em memória** (`conftest.py` sobrescreve `DATABASE_URL`) —
-nenhum teste toca o banco de produção.
+A suíte roda contra um **PostgreSQL real**, o mesmo motor da produção.
+`conftest.py` sobrescreve `DATABASE_URL` com `TEST_DATABASE_URL` (padrão
+`postgresql+psycopg://postgres:postgres@localhost:5432/finance_tracker_test`),
+aplica as migrações com `alembic upgrade head` e limpa as tabelas entre os
+testes. Nenhum teste toca o banco de produção.
+
+Até o B1 a suíte rodava em SQLite em memória. Além de testar outro motor, isso
+obrigava o serviço a manter dois caminhos de consulta — e deixava justamente o
+caminho de produção sem cobertura. Foi assim que um `GROUP BY` inválido passou
+pelos testes e só quebrou no deploy.
 
 | Arquivo | Cobre |
 |---|---|
@@ -325,10 +336,11 @@ uvicorn app.main:app --reload      # http://localhost:8000/docs
 
 | Variável | Obrigatória | Função |
 |---|---|---|
-| `DATABASE_URL` | ✅ | conexão PostgreSQL (ou SQLite em dev) |
+| `DATABASE_URL` | ✅ | conexão PostgreSQL |
 | `SECRET_KEY` | ✅ | assinatura JWT — validada no boot |
 | `FRONTEND_URL` | ✅ | origem permitida no CORS |
-| `APP_ENV` | recomendada | `production` fecha `/docs` e ativa cookies `Secure` |
+| `APP_ENV` | — | padrão **`production`** (fail closed: fecha `/docs` e ativa cookies `Secure`); `development` libera os dois |
+| `TRUST_PROXY_HEADERS` | recomendada na Render | confia em `CF-Connecting-IP`/`X-Forwarded-For` para obter o IP real; padrão `false` |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | — | padrão `30` |
 | `EMAIL_FROM`, `BREVO_API_KEY` | para e-mail | recuperação de senha |
 | `PASSWORD_RESET_URL` | para e-mail | base do link enviado |
@@ -347,6 +359,7 @@ Start:  alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
 Checklist de produção:
 
 - [ ] `APP_ENV=production` (fecha docs e ativa cookies `Secure`)
+- [ ] `TRUST_PROXY_HEADERS=true` na Render — sem isso o IP visto é o do proxy e o bucket de rate limit por IP fica desligado (buckets por e-mail e por `ip:email` seguem ativos)
 - [ ] `SECRET_KEY` de 64 hex gerada com `secrets.token_hex(32)`
 - [ ] `FRONTEND_URL` com o domínio exato do frontend
 - [ ] `alembic upgrade head` aplicado
@@ -358,7 +371,7 @@ Checklist de produção:
 | Decisão | Motivo | Custo aceito |
 |---|---|---|
 | `token_version` no banco (não denylist em memória) | sobrevive a restart e escala horizontal | 1 comparação por requisição (usuário já carregado) |
-| SQL puro para paginação em PostgreSQL, fallback em Python no SQLite | performance real sem quebrar a suíte de testes | dois caminhos de código em `/transactions/categories` |
+| Um único caminho PostgreSQL; suíte roda no banco real | o caminho de produção passa a ser testado, e o bug de `GROUP BY` não se repete | testes exigem um Postgres local (ou o serviço do CI) |
 | Rate limiter em memória | zero dependência para uma instância | **por processo** — não escala horizontalmente sem Redis |
 | Cookie `HttpOnly` opt-in, não migração | bloqueio de cookie de terceira parte tornaria o login pior | localStorage até haver domínio compartilhado |
 | bcrypt direto no lugar do passlib | passlib 1.7.4 (2020) quebra com bcrypt ≥ 4.1 e travava atualizações | API de hashing mantida pequena e testada |

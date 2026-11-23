@@ -3,7 +3,15 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Request,
+    Response,
+    status,
+)
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -16,31 +24,37 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
 def _client_ip(request: Request) -> str:
-    """Resolve o IP real do cliente na infraestrutura da Render.
+    """IP do cliente, confiando em cabeçalhos de proxy só quando habilitado.
 
-    Cadeia real: Cliente -> Cloudflare (edge da Render) -> proxy da Render -> app.
+    Cadeia na Render: Cliente -> Cloudflare (edge) -> proxy da Render -> app.
 
-    1. `CF-Connecting-IP` / `True-Client-Ip`: definidos pelo edge Cloudflare,
-       que SOBRESCREVE qualquer valor enviado pelo cliente — não forjáveis.
-    2. `X-Forwarded-For`: a Render documenta que o PRIMEIRO IP da lista é o
-       cliente real (o valor vindo do cliente é substituído pelo proxy; o
-       segundo elemento é o edge IP da Cloudflare, compartilhado).
-    3. Fallback: IP de conexão direta (uso local/sem proxy).
+    Com `TRUST_PROXY_HEADERS=true` (obrigatório na Render):
+    1. `CF-Connecting-IP` / `True-Client-Ip`: o edge Cloudflare sobrescreve
+       qualquer valor vindo do cliente;
+    2. `X-Forwarded-For`: a Render põe o cliente real no PRIMEIRO elemento;
+    3. IP da conexão TCP.
 
-    Limitação: se a aplicação for hospedada fora da Render (sem o proxy
-    confiável na frente), o primeiro elemento do XFF volta a ser forjável.
-    Nesse caso, confiure um proxy de confiança ou remova o fallback.
+    Com a flag desligada (padrão) devolve apenas o IP da conexão: cabeçalho
+    enviado pelo cliente é forjável, e um `X-Forwarded-For` falso daria uma
+    identidade nova a cada requisição, anulando o rate limit por IP.
     """
-    cf_ip = request.headers.get("cf-connecting-ip", "").strip()
-    if cf_ip:
-        return cf_ip.split(",")[0].strip()
-    true_client = request.headers.get("true-client-ip", "").strip()
-    if true_client:
-        return true_client.split(",")[0].strip()
-    forwarded = request.headers.get("x-forwarded-for", "").strip()
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    if config.TRUST_PROXY_HEADERS:
+        for header in ("cf-connecting-ip", "true-client-ip", "x-forwarded-for"):
+            value = request.headers.get(header, "").strip()
+            if value:
+                return value.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
+
+
+def _ip_is_trustworthy() -> bool:
+    """O bucket de rate limit por IP só vale quando o IP é do cliente.
+
+    Sem `TRUST_PROXY_HEADERS` em produção, `request.client.host` é o proxy:
+    TODOS os clientes cairiam no mesmo bucket e um atacante conseguiria
+    bloquear o login de todo mundo. Nesse cenário o bucket por IP é desligado;
+    os buckets por e-mail e por (IP + e-mail) continuam valendo.
+    """
+    return config.TRUST_PROXY_HEADERS or config.IS_DEV_ENV
 
 
 @router.post("/register", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
@@ -87,14 +101,38 @@ def login(
     db: Session = Depends(get_db),
 ):
     ip = _client_ip(request)
-    rate_key = f"login:{ip}:{form_data.username.strip().lower()}"
+    email = form_data.username.strip().lower()
+    pair_key = f"login:{ip}:{email}"
+    email_key = f"login-email:{email}"
+    ip_key = f"login-ip:{ip}"
+    # O bucket por IP é o único que depende de saber o IP real do cliente.
+    trusted_ip = _ip_is_trustworthy()
+
     try:
-        security.check_auth_rate_limit(rate_key)
-        email = form_data.username.strip().lower()
+        # Três buckets porque cada ataque tem uma forma: um IP contra uma
+        # conta, muitos IPs contra uma conta, e um IP contra muitas contas.
+        security.check_auth_rate_limit(pair_key, security.LOGIN_PAIR_LIMIT)
+        security.check_auth_rate_limit(email_key, security.LOGIN_EMAIL_LIMIT)
+        if trusted_ip:
+            security.check_auth_rate_limit(ip_key, security.LOGIN_IP_LIMIT)
+
         user = db.query(models.User).filter(models.User.email == email).first()
-        ok = bool(user and security.verify_password(form_data.password, user.hashed_password))
-        security.register_auth_attempt(rate_key, ok)
+
+        # O bcrypt roda MESMO quando o e-mail não existe. Antes havia um
+        # curto-circuito (`user and verify_password(...)`): e-mail inexistente
+        # respondia na hora e a conta existente gastava ~250 ms, o que
+        # permitia descobrir quem tem conta só medindo o tempo.
+        stored_hash = user.hashed_password if user else security.DUMMY_PASSWORD_HASH
+        password_ok = security.verify_password(form_data.password, stored_hash)
+
+        ok = password_ok and user is not None
+        security.register_auth_attempt(pair_key, ok, security.LOGIN_PAIR_LIMIT)
         if not ok:
+            # Falhas também contam nos buckets amplos; sucesso NÃO limpa esses
+            # dois (senão uma conta válida zeraria o limite do IP inteiro).
+            security.record_attempt(email_key, security.LOGIN_EMAIL_LIMIT)
+            if trusted_ip:
+                security.record_attempt(ip_key, security.LOGIN_IP_LIMIT)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="E-mail ou senha incorretos",
@@ -206,12 +244,19 @@ def _reset_link(token: str) -> str:
 @router.post("/forgot-password", status_code=status.HTTP_202_ACCEPTED)
 def forgot_password(
     request: Request,
+    background_tasks: BackgroundTasks,
     payload: schemas.ForgotPasswordRequest,
     db: Session = Depends(get_db),
 ):
     """Envia o link de redefinição — sempre com a mesma resposta.
 
     Um 404 para e-mail inexistente revelaria quais contas existem.
+
+    O envio vai para `BackgroundTasks`: antes a rota chamava o provedor
+    sincronicamente (até 10 s de timeout) apenas quando a conta existia, e esse
+    tempo — não a resposta — denunciava quem tem cadastro. Com o envio fora do
+    caminho da resposta, a diferença restante entre conta existente e
+    inexistente é um INSERT de milissegundos.
     """
     ip = _client_ip(request)
     email = str(payload.email).strip().lower()
@@ -251,7 +296,8 @@ def forgot_password(
 
         link = _reset_link(token)
         if link:
-            send_password_reset_email(user.email, link)
+            # Enviado depois da resposta: o provedor pode levar segundos.
+            background_tasks.add_task(send_password_reset_email, user.email, link)
 
     # Resposta genérica: mesmo corpo, mesmo status, exista ou não a conta.
     return {
@@ -288,7 +334,7 @@ def reset_password(
         raise invalid
 
     expira = registro.expires_at
-    if expira.tzinfo is None:  # SQLite devolve naive; o banco grava UTC.
+    if expira.tzinfo is None:  # defensivo: o banco grava UTC com fuso.
         expira = expira.replace(tzinfo=timezone.utc)
     if expira <= datetime.now(timezone.utc):
         raise invalid
