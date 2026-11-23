@@ -45,7 +45,7 @@ app/
 ├── schemas.py           # contratos de entrada/saída
 ├── routes/              # auth.py, transactions.py
 └── services/            # regras de negócio: transactions, excel_export, email
-migrations/versions/     # 0001 → 0004
+migrations/versions/     # 0001 → 0005
 scripts/backup.py        # dump lógico independente do provedor
 ```
 
@@ -91,12 +91,15 @@ foi removido: banco criado por código diverge do banco de produção silenciosa
 | `POST` | `/auth/login` | Login OAuth2 form → JWT no corpo |
 | `POST` | `/auth/logout` | Revoga **todas** as sessões do usuário |
 | `GET` | `/auth/me` | Dados do usuário autenticado |
+| `GET` | `/auth/me/export` | Exporta todos os dados em JSON (LGPD) — `no-store` |
+| `DELETE` | `/auth/me` | Exclui conta e dados (exige senha; `403` se errada) |
 | `POST` | `/auth/forgot-password` | Solicita link de redefinição (sempre `202`) |
 | `POST` | `/auth/reset-password` | Troca a senha com o token do e-mail |
 | `POST` | `/transactions/` | Cria transação |
 | `GET` | `/transactions/` | Lista com filtros e paginação |
 | `GET` | `/transactions/summary` | Resumo agregado |
 | `GET` | `/transactions/categories` | Totais por categoria |
+| `GET` | `/transactions/years` | Anos com transações (alimenta o filtro do front) |
 | `GET` | `/transactions/{id}` | Detalhe |
 | `PUT` | `/transactions/{id}` | Atualiza |
 | `DELETE` | `/transactions/{id}` | Exclui |
@@ -196,6 +199,8 @@ PASSWORD_RESET_TTL_MINUTES=30
 | Documentação | `/docs` e `/openapi.json` fechados em produção |
 | Isolamento | toda consulta filtrada por `user_id`; acesso indevido devolve `404` (não `403`) |
 | Enumeração | login roda o bcrypt mesmo para e-mail inexistente (hash falso de mesmo custo) e `forgot-password` envia fora do caminho da resposta — o tempo não denuncia contas. `register` devolve `409` de propósito (UX > sigilo de existência) |
+| Exclusão de conta | exige senha; `ON DELETE CASCADE` remove transações e tokens; senha errada devolve `403` (não `401`, que o front lê como sessão expirada) |
+| Portabilidade | `GET /auth/me/export` em JSON, com valores em string (centavos preservados) e sem o hash da senha |
 | Segredos | `.env` fora do Git; nenhuma credencial no histórico |
 
 **Detalhe que costuma passar:** o `ServerErrorMiddleware` do Starlette roda
@@ -235,6 +240,7 @@ alembic revision --autogenerate -m "descrição"
 | `0002_indexes` | índices `(user_id, date)` e `(user_id, type)` |
 | `0003_token_version` | coluna aditiva para revogação de sessão |
 | `0004_password_reset` | tabela de tokens de redefinição |
+| `0005_user_cascade` | `ON DELETE CASCADE` na FK de `transactions` |
 
 Para um banco que já tinha as tabelas (criadas por versões antigas):
 `alembic stamp 0001_initial` → `alembic upgrade head`.

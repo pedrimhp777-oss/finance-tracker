@@ -180,3 +180,27 @@ def summary_for(
         "total_expense": total_expense,
         "balance": total_income - total_expense,
     }
+
+
+def available_years(
+    db: Session,
+    user_id: int,
+    timezone_name: str | None = None,
+) -> list[int]:
+    """Anos em que o usuário tem ao menos uma transação, do mais recente ao
+    mais antigo, já no fuso do cliente.
+
+    Alimenta o filtro de ano do frontend. Derivar a lista das transações já
+    carregadas limitava o seletor à página atual — e, com um ano selecionado,
+    ao próprio ano escolhido, escondendo o histórico.
+    """
+    local_date = func.timezone(timezone_name or "UTC", models.Transaction.date)
+    year_expression = extract("year", local_date)
+    rows = (
+        db.query(year_expression)
+        .filter(models.Transaction.user_id == user_id)
+        .distinct()
+        .order_by(year_expression.desc())
+        .all()
+    )
+    return [int(year) for (year,) in rows if year is not None]

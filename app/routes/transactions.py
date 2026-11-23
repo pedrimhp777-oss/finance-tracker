@@ -119,6 +119,28 @@ def get_expenses_by_category(
     )
 
 
+# 2c. ANOS COM TRANSAÇÕES (alimenta o filtro de ano do frontend)
+#
+# Declarada antes de `/{transaction_id}`: o FastAPI casa por ordem de
+# declaração e `years` seria interpretado como id.
+@router.get("/years", response_model=List[int])
+def list_available_years(
+    timezone_name: str = Query("UTC", max_length=64),
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    """Anos em que o usuário tem transações, do mais recente ao mais antigo.
+
+    Existe porque o frontend derivava os anos das transações já carregadas —
+    só a página atual, e já filtrada pelo ano escolhido. O resultado era um
+    seletor que perdia o histórico a cada filtro.
+    """
+    _timezone_or_422(timezone_name)
+    return transactions_service.available_years(
+        db, current_user.id, timezone_name=timezone_name
+    )
+
+
 # 3. LISTAR TRANSAÇÕES (COM PAGINAÇÃO E FILTROS OPCIONAIS)
 @router.get("/", response_model=List[schemas.TransactionResponse])
 def list_transactions(
