@@ -9,7 +9,7 @@ O que está em jogo aqui:
 """
 import hashlib
 from datetime import datetime, timedelta, timezone
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -40,7 +40,10 @@ def capturar_email(monkeypatch):
 
 
 def _token_do_link(link: str) -> str:
-    return parse_qs(urlparse(link).query)["reset_token"][0]
+    # O token viaja no fragmento: a query nunca o contém.
+    partes = urlsplit(link)
+    assert not parse_qs(partes.query).get("reset_token")
+    return parse_qs(partes.fragment)["reset_token"][0]
 
 
 def _criar_usuario(client):
@@ -545,3 +548,40 @@ def test_reivindicacao_e_um_update_condicional(db):
     assert updates, emitidos
     assert "used_at IS NULL" in updates[0]
     assert "expires_at >" in updates[0]
+
+
+# ------------------------------------------- token no fragmento (F8)
+
+def test_link_envia_o_token_no_fragmento(client, capturar_email):
+    """O token não pode ir na query: ela vai para os logs do servidor.
+
+    Um `GET /?reset_token=...` fica registrado no log de acesso, no `Referer`
+    e em qualquer proxy entre o usuário e o app. O fragmento não é enviado em
+    nenhuma requisição.
+    """
+    _criar_usuario(client)
+    client.post("/auth/forgot-password", json={"email": EMAIL})
+
+    link = capturar_email[0]["link"]
+    partes = urlsplit(link)
+
+    assert partes.query == "", f"query não deveria carregar nada: {link}"
+    assert partes.fragment.startswith("reset_token=")
+    assert "reset_token" not in link.split("#")[0]
+
+
+def test_link_funciona_de_ponta_a_ponta_pelo_fragmento(client, capturar_email):
+    """Ler o token do fragmento e trocar a senha, como o frontend faz."""
+    _criar_usuario(client)
+    client.post("/auth/forgot-password", json={"email": EMAIL})
+    token = _token_do_link(capturar_email[0]["link"])
+
+    res = client.post(
+        "/auth/reset-password", json={"token": token, "new_password": "senha-nova-123"}
+    )
+
+    assert res.status_code == 204
+    assert (
+        client.post("/auth/login", data={"username": EMAIL, "password": "senha-nova-123"}).status_code
+        == 200
+    )

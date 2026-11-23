@@ -290,11 +290,21 @@ def _hash_reset_token(token: str) -> str:
 
 
 def _reset_link(token: str) -> str:
+    """Monta o link do e-mail com o token no **fragmento**, não na query.
+
+    O fragmento (`#...`) nunca é enviado ao servidor: fica fora dos logs de
+    acesso da Vercel, do `Referer` e de qualquer proxy no caminho. Na query, o
+    token aparecia nos logs de toda requisição feita ao abrir o link — um
+    segredo de uso único gravado em texto claro num lugar que ninguém audita.
+
+    O frontend lê o fragmento e ainda aceita a query antiga, porque um e-mail
+    enviado segundos antes do deploy continua válido por 30 minutos.
+    """
     base = config.PASSWORD_RESET_URL or ""
     if not base:
         # Sem URL configurada o e-mail seria inútil; o chamador trata.
         return ""
-    return f"{base}/?reset_token={quote(token)}"
+    return f"{base}/#reset_token={quote(token)}"
 
 
 @router.post("/forgot-password", status_code=status.HTTP_202_ACCEPTED)
