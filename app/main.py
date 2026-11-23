@@ -4,7 +4,6 @@ from fastapi import Depends, FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from scalar_fastapi import get_scalar_api_reference
-from dotenv import load_dotenv
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -21,7 +20,8 @@ from app.observability import init_sentry
 from app.services.email import log_email_configuration
 from app.routes import transactions, auth
 
-load_dotenv()
+# O ambiente é carregado por `app.config` (importado acima), que é o primeiro
+# módulo a ler variáveis como APP_ENV — carregar aqui seria tarde demais.
 
 # Monitoramento de erros: no-op se SENTRY_DSN nao estiver definido.
 # Chamado antes de criar o app para que falhas de import/warmup sejam vistas.

@@ -134,7 +134,11 @@ def test_docs_and_openapi_available_in_dev(app_env):
 
 
 def test_docs_available_in_current_test_env(client):
-    """Suíte roda com APP_ENV ausente -> development: docs acessíveis."""
+    """A suíte fixa APP_ENV=development no conftest: docs acessíveis.
+
+    O padrão do app (sem APP_ENV) passou a ser produção — ver
+    `test_config_defaults.py`.
+    """
     assert client.get("/openapi.json").status_code == 200
     assert client.get("/docs").status_code == 200
 

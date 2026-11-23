@@ -387,3 +387,60 @@ def test_brevo_com_erro_nao_propaga(monkeypatch):
 )
 def test_parser_do_remetente_tolera_formatos(bruto, esperado):
     assert email_service._parse_sender(bruto) == esperado
+
+
+# --- Envio fora do caminho da resposta (B2) ---
+
+def test_forgot_agenda_o_envio_em_background(client, monkeypatch):
+    """A rota não pode esperar o provedor (timeout de até 10 s).
+
+    Além de segurar a resposta, o tempo denunciava quem tem conta: só a conta
+    existente chegava a chamar o provedor.
+    """
+    from app.routes import auth as auth_routes
+
+    # Sem URL de reset configurada o link nem é montado (nem enviado) — o CI
+    # não tem .env, então o teste precisa garantir a variável.
+    monkeypatch.setattr(
+        auth_routes.config, "PASSWORD_RESET_URL", "https://app.exemplo.com"
+    )
+
+    email = "background@email.com"
+    get_auth_headers(client, email)  # registra a conta
+
+    agendados = []
+    monkeypatch.setattr(
+        auth_routes.BackgroundTasks,
+        "add_task",
+        lambda self, fn, *args, **kwargs: agendados.append((fn, args)),
+    )
+
+    res = client.post("/auth/forgot-password", json={"email": email})
+
+    assert res.status_code == 202
+    assert len(agendados) == 1, "o envio deveria ter sido agendado, não executado"
+    fn, args = agendados[0]
+    assert fn is auth_routes.send_password_reset_email
+    assert args[0] == email
+    assert "reset_token=" in args[1]
+
+
+def test_forgot_nao_agenda_envio_para_conta_inexistente(client, monkeypatch):
+    """Não existindo conta, não há o que enviar — a resposta segue igual."""
+    from app.routes import auth as auth_routes
+
+    monkeypatch.setattr(
+        auth_routes.config, "PASSWORD_RESET_URL", "https://app.exemplo.com"
+    )
+
+    agendados = []
+    monkeypatch.setattr(
+        auth_routes.BackgroundTasks,
+        "add_task",
+        lambda self, fn, *args, **kwargs: agendados.append((fn, args)),
+    )
+
+    res = client.post("/auth/forgot-password", json={"email": "ninguem@email.com"})
+
+    assert res.status_code == 202
+    assert agendados == []

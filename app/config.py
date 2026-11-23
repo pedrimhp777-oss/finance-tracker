@@ -4,10 +4,36 @@ Centraliza o que antes estava duplicado em `app/main.py` e `app/security.py`.
 """
 import os
 
-APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
+from dotenv import load_dotenv
+
+# Carregado AQUI, e não em `main.py`: `app.config` é importado no topo do main
+# (antes do `load_dotenv()` que ficava no fim do arquivo), então APP_ENV,
+# PASSWORD_RESET_URL e o TTL vindos do `.env` local eram silenciosamente
+# ignorados — o módulo já tinha lido o ambiente do processo.
+load_dotenv()
+
+# Padrão SEGURO (fail closed): sem APP_ENV o app se comporta como produção —
+# /docs e /openapi.json fechados, cookie com `Secure`. Desenvolvimento passou a
+# ser opt-in explícito (`APP_ENV=development`), e não o contrário.
+APP_ENV = os.getenv("APP_ENV", "production").strip().lower()
 
 # Ambientes locais/teste: docs abertos e cookies sem `Secure` (HTTP puro).
 IS_DEV_ENV = APP_ENV in {"development", "dev", "local", "test"}
+
+# --- IP do cliente atrás de proxy --------------------------------------
+# Ligado: confia em CF-Connecting-IP / True-Client-IP / X-Forwarded-For, o que
+# é correto na Render (atrás do edge da Cloudflare). Desligado (padrão): usa
+# apenas o IP da conexão TCP, porque cabeçalho enviado pelo cliente é forjável
+# e um X-Forwarded-For falso criaria uma identidade nova a cada requisição,
+# anulando o rate limit por IP.
+#   Render/Vercel: definir TRUST_PROXY_HEADERS=true no serviço.
+TRUST_PROXY_HEADERS = os.getenv("TRUST_PROXY_HEADERS", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+    "sim",
+}
 
 # --- Cookies de autenticação ------------------------------------------
 # ⚠️ LIMITAÇÃO ARQUITETURAL CONHECIDA (leia antes de migrar o frontend):

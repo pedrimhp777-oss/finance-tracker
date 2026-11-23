@@ -7,6 +7,9 @@ load_dotenv()
 # Sobrescrevemos (e nunca apenas "setdefault") para garantir que nenhum teste
 # acesse o banco configurado no ambiente (produção/Neon).
 os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+# A suíte roda como desenvolvimento: o padrão do app passou a ser produção
+# (docs fechados, cookie `Secure`) e os testes de cookie dependem de HTTP puro.
+os.environ["APP_ENV"] = "development"
 # Chave apenas para testes locais/CI (não é segredo de produção).
 # Valor aleatório de 64 hex: precisa passar pelo validador de força que
 # rejeita placeholders como "test-only...".

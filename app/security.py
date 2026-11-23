@@ -102,6 +102,16 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
 # no formato `$2b$` gerados pelo passlib continuam válidos.
 BCRYPT_MAX_PASSWORD_BYTES = 72
 
+# Hash de uma senha aleatória que ninguém conhece, com o mesmo custo (12) dos
+# hashes reais. O login verifica a senha contra ele quando o e-mail NÃO existe:
+# sem isso a rota respondia na hora para e-mail inexistente e só gastava o
+# custo do bcrypt quando a conta existia, permitindo enumerar contas pelo tempo
+# de resposta. Fixado como constante para não pagar o custo em cada boot.
+# `test_password_hashing.py` garante que o custo acompanha `hash_password`.
+DUMMY_PASSWORD_HASH = (
+    "$2b$12$S7ikU2xd9RTPgFsJHbFwU.F5WefRbJJTNi54I3p3FadK3BqGOfYdy"
+)
+
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 # Variante que não falha sozinha: permite cair para o cookie de sessão.
 oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
@@ -139,6 +149,13 @@ def enforce_csrf(request: Request) -> None:
 # escalar horizontalmente, migrar para um limitador externo (ex.: Redis).
 _MAX_ATTEMPTS = 10
 _WINDOW_SECONDS = 300
+# Limites por bucket no login. Cada ataque tem uma forma diferente:
+#   par (IP + e-mail) -> força bruta contra UMA conta a partir de UM IP;
+#   e-mail            -> a mesma conta atacada por MUITOS IPs (distribuído);
+#   IP                -> credential stuffing, muitos e-mails de UM IP.
+LOGIN_PAIR_LIMIT = _MAX_ATTEMPTS
+LOGIN_EMAIL_LIMIT = 20
+LOGIN_IP_LIMIT = 60
 # Limita o número de chaves rastreadas para impedir crescimento ilimitado
 # da memória (atacante gerando e-mails/IPs distintos).
 _MAX_KEYS = 10_000
@@ -172,7 +189,7 @@ def _touch(key: str, now: float) -> deque[float]:
     return window
 
 
-def register_auth_attempt(key: str, success: bool) -> None:
+def register_auth_attempt(key: str, success: bool, limit: int = _MAX_ATTEMPTS) -> None:
     """Registra uma tentativa; falhas consecutivas elevam o contador.
 
     Sucessos limpam o histórico da chave para não bloquear usuários legítimos.
@@ -184,11 +201,11 @@ def register_auth_attempt(key: str, success: bool) -> None:
             window.clear()
             return
         window.append(now)
-        if len(window) > _MAX_ATTEMPTS:
+        if len(window) > limit:
             raise RateLimitExceeded()
 
 
-def record_attempt(key: str) -> None:
+def record_attempt(key: str, limit: int = _MAX_ATTEMPTS) -> None:
     """Registra QUALQUER tentativa (sucesso ou falha), sem limpar a janela.
 
     Usado em rotas onde o próprio volume de requisições é o abuso
@@ -198,16 +215,16 @@ def record_attempt(key: str) -> None:
     with _attempts_lock:
         window = _touch(key, now)
         window.append(now)
-        if len(window) > _MAX_ATTEMPTS:
+        if len(window) > limit:
             raise RateLimitExceeded()
 
 
-def check_auth_rate_limit(key: str) -> None:
+def check_auth_rate_limit(key: str, limit: int = _MAX_ATTEMPTS) -> None:
     """Lança RateLimitExceeded se a chave já excedeu o limite."""
     now = time.monotonic()
     with _attempts_lock:
         window = _touch(key, now)
-        if len(window) > _MAX_ATTEMPTS:
+        if len(window) > limit:
             raise RateLimitExceeded()
 def hash_password(password: str) -> str:
     """Gera o hash bcrypt da senha.
