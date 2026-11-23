@@ -38,7 +38,7 @@ inclusive as **limitações conhecidas**.
 app/
 ├── main.py              # composição: middlewares, rotas, handlers globais
 ├── config.py            # configuração derivada de ambiente (fonte única)
-├── security.py          # JWT, hashing, CSRF, rate limit, get_current_user
+├── security.py          # JWT, hashing, rate limit, get_current_user
 ├── middleware.py        # no-store por escopo + nosniff (ASGI puro)
 ├── observability.py     # Sentry com scrubbing de PII
 ├── models.py            # User, Transaction, PasswordResetToken
@@ -55,7 +55,7 @@ scripts/backup.py        # dump lógico independente do provedor
 Cliente → CORS → nosniff → no-store (rotas sensíveis) → rota
                                                        ↓
                                         Depends(get_current_user)
-                          Bearer (precedência) ou cookie HttpOnly
+                                          header Authorization: Bearer
                                                        ↓
                               valida JWT → confere token_version no banco
                                                        ↓
@@ -88,7 +88,7 @@ foi removido: banco criado por código diverge do banco de produção silenciosa
 | Método | Rota | Descrição |
 |---|---|---|
 | `POST` | `/auth/register` | Cadastro (`201`, e-mail duplicado → `409`) |
-| `POST` | `/auth/login` | Login OAuth2 form → JWT + cookies |
+| `POST` | `/auth/login` | Login OAuth2 form → JWT no corpo |
 | `POST` | `/auth/logout` | Revoga **todas** as sessões do usuário |
 | `GET` | `/auth/me` | Dados do usuário autenticado |
 | `POST` | `/auth/forgot-password` | Solicita link de redefinição (sempre `202`) |
@@ -107,30 +107,29 @@ foi removido: banco criado por código diverge do banco de produção silenciosa
 
 ## Autenticação
 
-### Modo ativo: `Authorization: Bearer`
+### `Authorization: Bearer`
 
-O frontend guarda o JWT no `localStorage`. Requisições com esse header **não
-passam por verificação de CSRF** — um site terceiro não consegue definir esse
-header em formulários ou navegações.
+O frontend guarda o JWT no `localStorage` e envia no header. Requisições assim
+**não precisam de token CSRF**: um site terceiro não consegue definir um header
+customizado — formulários e navegações só carregam cookies e corpo, e o CORS
+barra a leitura da resposta.
 
 **Risco aceito:** em caso de XSS, um script poderia ler o token. As mitigações
 aplicadas são ausência de vetores de injeção no frontend (nenhum
 `dangerouslySetInnerHTML`/`innerHTML`/`eval`), escape padrão do React e **CSP
 em modo enforcing** no deploy.
 
-### Modo alternativo: cookie `HttpOnly` (opt-in)
+### Por que não existe sessão por cookie
 
-O login também emite `access_token` (`HttpOnly`, ilegível por JS) e
-`csrf_token` (legível, para *double-submit*). Troca de estado exige
-`X-CSRF-Token` igual ao cookie; o header `Authorization` tem precedência.
+Havia um segundo modo, opt-in: cookie `HttpOnly` + CSRF double-submit. Ele foi
+**removido** porque exigiria API e frontend no mesmo domínio registrável
+(`app.exemplo.com` + `api.exemplo.com`). Como hoje são `*.vercel.app` e
+`*.onrender.com`, o cookie seria de terceira parte e o navegador o descartaria.
 
-**Por que não é usado hoje:** o Axios não envia credenciais cross-origin, e API
-(`*.onrender.com`) e frontend (`*.vercel.app`) são domínios registráveis
-diferentes — o cookie seria de terceira parte.
-
-**Pré-requisitos para migrar:** servir API e frontend sob o mesmo domínio
-registrável, definir `Domain` no cookie CSRF (ou expor `GET /auth/csrf`, senão o
-JS não lê o token) e ligar `withCredentials`.
+Manter o caminho sem uso custava mais do que rendia: código de autenticação que
+nunca roda em produção envelhece sem ser exercitado e sugere uma proteção que
+não está ativa. A implementação está no histórico do Git, caso um dia haja
+domínio próprio.
 
 ### Revogação de sessão
 
@@ -312,7 +311,6 @@ pelos testes e só quebrou no deploy.
 | `test_security_headers` | escopo de `no-store`, preflight, `OPTIONS` |
 | `test_cors_on_500` | CORS em erro não tratado |
 | `test_session_revocation` | `tv` inválido, revogação, tokens legados |
-| `test_cookie_auth` | cookie + CSRF double-submit |
 | `test_password_reset` | enumeração, uso único, expiração, rate limit, provedores |
 | `test_password_hashing` | bcrypt e **compatibilidade com hashes do passlib** |
 | `test_secret_key_validation` | chaves fracas e placeholders |
@@ -339,7 +337,7 @@ uvicorn app.main:app --reload      # http://localhost:8000/docs
 | `DATABASE_URL` | ✅ | conexão PostgreSQL |
 | `SECRET_KEY` | ✅ | assinatura JWT — validada no boot |
 | `FRONTEND_URL` | ✅ | origem permitida no CORS |
-| `APP_ENV` | — | padrão **`production`** (fail closed: fecha `/docs` e ativa cookies `Secure`); `development` libera os dois |
+| `APP_ENV` | — | padrão **`production`** (fail closed: fecha `/docs` e `/openapi.json`); `development` abre |
 | `TRUST_PROXY_HEADERS` | recomendada na Render | confia em `CF-Connecting-IP`/`X-Forwarded-For` para obter o IP real; padrão `false` |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | — | padrão `30` |
 | `EMAIL_FROM`, `BREVO_API_KEY` | para e-mail | recuperação de senha |
@@ -358,7 +356,7 @@ Start:  alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
 
 Checklist de produção:
 
-- [ ] `APP_ENV=production` (fecha docs e ativa cookies `Secure`)
+- [ ] `APP_ENV=production` (fecha `/docs` e `/openapi.json`)
 - [ ] `TRUST_PROXY_HEADERS=true` na Render — sem isso o IP visto é o do proxy e o bucket de rate limit por IP fica desligado (buckets por e-mail e por `ip:email` seguem ativos)
 - [ ] `SECRET_KEY` de 64 hex gerada com `secrets.token_hex(32)`
 - [ ] `FRONTEND_URL` com o domínio exato do frontend
@@ -373,7 +371,7 @@ Checklist de produção:
 | `token_version` no banco (não denylist em memória) | sobrevive a restart e escala horizontal | 1 comparação por requisição (usuário já carregado) |
 | Um único caminho PostgreSQL; suíte roda no banco real | o caminho de produção passa a ser testado, e o bug de `GROUP BY` não se repete | testes exigem um Postgres local (ou o serviço do CI) |
 | Rate limiter em memória | zero dependência para uma instância | **por processo** — não escala horizontalmente sem Redis |
-| Cookie `HttpOnly` opt-in, não migração | bloqueio de cookie de terceira parte tornaria o login pior | localStorage até haver domínio compartilhado |
+| Sessão só por `Bearer`, sem cookie | frontend e API em domínios registráveis diferentes: o cookie seria de terceira parte e o navegador o descarta | token no `localStorage`; XSS mitigado por CSP enforcing e ausência de injeção |
 | bcrypt direto no lugar do passlib | passlib 1.7.4 (2020) quebra com bcrypt ≥ 4.1 e travava atualizações | API de hashing mantida pequena e testada |
 | CSP estática (sem nonce) | hospedagem estática não permite nonce | `style-src 'unsafe-inline'` é necessário para o Recharts |
 

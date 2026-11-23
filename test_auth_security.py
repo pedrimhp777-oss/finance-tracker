@@ -220,3 +220,37 @@ def test_limite_por_par_continua_valendo(client):
             break
     assert codigos[-1] == 429
     assert codigos.count(401) == security.LOGIN_PAIR_LIMIT
+
+
+# --- Sessão apenas por Bearer (B5: cookie removido) ---
+
+def test_login_nao_emite_cookie_de_sessao(client):
+    """A sessão é um token no corpo; nenhum cookie é definido.
+
+    O modo cookie + CSRF existia como alternativa opt-in e foi removido: sem
+    frontend e API no mesmo domínio registrável, o navegador descartaria o
+    cookie de qualquer forma.
+    """
+    client.post(
+        "/auth/register",
+        json={"name": "Sem", "email": "semcookie@email.com", "password": "password123"},
+    )
+    res = client.post(
+        "/auth/login",
+        data={"username": "semcookie@email.com", "password": "password123"},
+    )
+
+    assert res.status_code == 200
+    assert "access_token" in res.json()
+    assert not [h for h in res.headers if h.lower() == "set-cookie"]
+
+
+def test_cookie_com_token_valido_nao_autentica(client):
+    """Contraprova: o token só vale no header, nunca em cookie."""
+    headers = get_auth_headers(client, "soheader@email.com")
+    token = headers["Authorization"].split(" ", 1)[1]
+
+    client.cookies.set("access_token", token)
+    res = client.get("/auth/me")
+
+    assert res.status_code == 401
