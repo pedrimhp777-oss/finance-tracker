@@ -99,15 +99,36 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
 # no formato `$2b$` gerados pelo passlib continuam válidos.
 BCRYPT_MAX_PASSWORD_BYTES = 72
 
-# Hash de uma senha aleatória que ninguém conhece, com o mesmo custo (12) dos
-# hashes reais. O login verifica a senha contra ele quando o e-mail NÃO existe:
-# sem isso a rota respondia na hora para e-mail inexistente e só gastava o
-# custo do bcrypt quando a conta existia, permitindo enumerar contas pelo tempo
-# de resposta. Fixado como constante para não pagar o custo em cada boot.
-# `test_password_hashing.py` garante que o custo acompanha `hash_password`.
-DUMMY_PASSWORD_HASH = (
-    "$2b$12$S7ikU2xd9RTPgFsJHbFwU.F5WefRbJJTNi54I3p3FadK3BqGOfYdy"
-)
+
+def _configured_bcrypt_rounds() -> int:
+    """Custo do bcrypt (log2 das iterações). 12 em produção.
+
+    Os testes usam 4 (`BCRYPT_ROUNDS=4` no conftest): com 12, cada cadastro
+    custa ~250 ms e a suíte inteira levava mais de três minutos só hasheando.
+    O valor é lido do ambiente — nunca reduzido por conta própria.
+    """
+    raw = os.getenv("BCRYPT_ROUNDS", "12").strip()
+    try:
+        rounds = int(raw)
+    except ValueError:
+        raise RuntimeError("BCRYPT_ROUNDS precisa ser um número inteiro.") from None
+    if not 4 <= rounds <= 31:
+        raise RuntimeError("BCRYPT_ROUNDS precisa estar entre 4 e 31.")
+    return rounds
+
+
+BCRYPT_ROUNDS = _configured_bcrypt_rounds()
+
+# Hash de uma senha aleatória que ninguém conhece, com o MESMO custo dos hashes
+# reais. O login verifica a senha contra ele quando o e-mail NÃO existe: sem
+# isso a rota respondia na hora para e-mail inexistente e só gastava o custo do
+# bcrypt quando a conta existia, permitindo enumerar contas pelo tempo de
+# resposta. Gerado no import (custa um hash por boot) para acompanhar
+# automaticamente o custo configurado — um valor fixo mentiria se o custo
+# mudasse e reabriria a brecha.
+DUMMY_PASSWORD_HASH = bcrypt.hashpw(
+    os.urandom(32), bcrypt.gensalt(rounds=BCRYPT_ROUNDS)
+).decode("ascii")
 
 # Único modo de sessão. `auto_error=False`: a ausência do header vira o mesmo
 # 401 de token inválido, sem revelar qual credencial faltou.
@@ -207,7 +228,7 @@ def hash_password(password: str) -> str:
         raise ValueError(
             f"A senha excede o limite de {BCRYPT_MAX_PASSWORD_BYTES} bytes do bcrypt."
         )
-    return bcrypt.hashpw(payload, bcrypt.gensalt()).decode("ascii")
+    return bcrypt.hashpw(payload, bcrypt.gensalt(rounds=BCRYPT_ROUNDS)).decode("ascii")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

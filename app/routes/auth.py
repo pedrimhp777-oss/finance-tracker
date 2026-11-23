@@ -260,6 +260,37 @@ def forgot_password(
     }
 
 
+def _claim_reset_token(
+    db: Session, token: str, now: datetime
+) -> models.PasswordResetToken | None:
+    """Consome o token de forma atômica; devolve None se não for utilizável.
+
+    `UPDATE ... WHERE used_at IS NULL` informa quantas linhas mudaram: só uma
+    requisição pode ganhar. Antes o código lia o registro, checava `used_at` em
+    Python e só depois gravava — entre a leitura e a escrita, dois pedidos
+    simultâneos com o mesmo link passavam pela checagem e ambos trocavam a
+    senha. Expiração também entra no próprio WHERE, pelo mesmo motivo.
+    """
+    token_hash = _hash_reset_token(token)
+    claimed = (
+        db.query(models.PasswordResetToken)
+        .filter(
+            models.PasswordResetToken.token_hash == token_hash,
+            models.PasswordResetToken.used_at.is_(None),
+            models.PasswordResetToken.expires_at > now,
+        )
+        .update({models.PasswordResetToken.used_at: now}, synchronize_session=False)
+    )
+    if claimed != 1:
+        db.rollback()
+        return None
+    return (
+        db.query(models.PasswordResetToken)
+        .filter(models.PasswordResetToken.token_hash == token_hash)
+        .one()
+    )
+
+
 @router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT)
 def reset_password(
     request: Request,
@@ -280,29 +311,19 @@ def reset_password(
         detail="Link inválido ou expirado. Solicite um novo.",
     )
 
-    registro = (
-        db.query(models.PasswordResetToken)
-        .filter(models.PasswordResetToken.token_hash == _hash_reset_token(payload.token))
-        .first()
-    )
-    if registro is None or registro.used_at is not None:
-        raise invalid
-
-    expira = registro.expires_at
-    if expira.tzinfo is None:  # defensivo: o banco grava UTC com fuso.
-        expira = expira.replace(tzinfo=timezone.utc)
-    if expira <= datetime.now(timezone.utc):
+    registro = _claim_reset_token(db, payload.token, datetime.now(timezone.utc))
+    if registro is None:
         raise invalid
 
     user = db.query(models.User).filter(models.User.id == registro.user_id).first()
     if user is None:
+        db.rollback()
         raise invalid
 
     user.hashed_password = security.hash_password(payload.new_password)
     # Revoga sessões antigas: se a conta estava comprometida, o token do
     # invasor morre junto com a troca de senha.
     user.token_version = (user.token_version or 0) + 1
-    registro.used_at = datetime.now(timezone.utc)
 
     # Uso único de fato: nenhum outro pedido pendente continua válido.
     db.query(models.PasswordResetToken).filter(
