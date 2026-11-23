@@ -1,6 +1,7 @@
 import os
 
 from fastapi import Depends, FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from scalar_fastapi import get_scalar_api_reference
@@ -18,6 +19,7 @@ from app.middleware import (
 )
 from app.observability import init_sentry
 from app.services.email import log_email_configuration
+from app.validation import validation_exception_handler
 from app.routes import transactions, auth
 
 # O ambiente é carregado por `app.config` (importado acima), que é o primeiro
@@ -104,6 +106,12 @@ def apply_cors_headers(request: Request, response: JSONResponse) -> None:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Vary"] = "Origin"
+
+
+# Mensagens de validação em português (o padrão do FastAPI é inglês).
+# Registrado antes do handler genérico: o Starlette escolhe o handler mais
+# específico pela classe da exceção.
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
 
 @app.exception_handler(Exception)
