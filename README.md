@@ -264,13 +264,32 @@ alembic revision --autogenerate -m "descrição"
 | `0002_indexes` | índices `(user_id, date)` e `(user_id, type)` |
 | `0003_token_version` | coluna aditiva para revogação de sessão |
 | `0004_password_reset` | tabela de tokens de redefinição |
-| `0005_user_cascade` | `ON DELETE CASCADE` na FK de `transactions` |
+| `0005_user_cascade` | `ON DELETE CASCADE` na FK de `transactions` (descobre o nome da constraint) |
 
 Para um banco que já tinha as tabelas (criadas por versões antigas):
 `alembic stamp 0001_initial` → `alembic upgrade head`.
 
 > Em DDL, use a conexão **direta** do Neon (sem `-pooler`): poolers podem
 > interferir em operações de schema.
+
+### Duas origens, dois esquemas
+
+Existem dois tipos de banco em circulação e eles **não são idênticos**:
+
+| Origem | Constraint da FK | Downgrade funciona? |
+|---|---|---|
+| `alembic upgrade head` num banco vazio | `fk_transaction_user` | sim, até `base` |
+| Tabelas de versões antigas (`create_all`) + `stamp` | `transactions_user_id_fkey` | **só a partir da `0005`** |
+
+A produção nasceu do segundo jeito. Nomes de índice e de constraint que o
+`create_all` gerou não batem com os que as migrações criam, então rolar até
+`base` num banco carimbado falha (`index "ix_transactions_user_type" does not
+exist`) — condição anterior à `0005`, não um defeito dela. **Upgrade sempre
+funciona**; downgrade de uma revisão por vez também.
+
+Por isso a `0005` descobre o nome real da constraint em `pg_constraint` em vez
+de assumir `fk_transaction_user`: a primeira versão assumia, e o deploy em
+produção falhou com `constraint "fk_transaction_user" does not exist`.
 
 ## Backup
 
@@ -394,7 +413,7 @@ Start:  alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
 Checklist de produção:
 
 - [ ] `APP_ENV=production` (fecha `/docs` e `/openapi.json`)
-- [ ] `TRUST_PROXY_HEADERS=true` na Render — sem isso o IP visto é o do proxy e o bucket de rate limit por IP fica desligado (buckets por e-mail e por `ip:email` seguem ativos)
+- [ ] `TRUST_PROXY_HEADERS=true` na Render — sem isso o IP visto é o do proxy e o bucket de rate limit por IP fica desligado (buckets por e-mail e por `ip:email` seguem ativos). **Como conferir:** o boot registra o estado efetivo (`TRUST_PROXY_HEADERS=false` sai como `WARNING`) — veja o log do serviço, não o painel
 - [ ] `SECRET_KEY` de 64 hex gerada com `secrets.token_hex(32)`
 - [ ] `FRONTEND_URL` com o domínio exato do frontend
 - [ ] `alembic upgrade head` aplicado
