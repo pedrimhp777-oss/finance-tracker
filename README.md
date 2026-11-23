@@ -302,12 +302,17 @@ A suíte roda contra um **PostgreSQL real**, o mesmo motor da produção.
 aplica as migrações com `alembic upgrade head` e limpa as tabelas entre os
 testes. Nenhum teste toca o banco de produção.
 
+Os testes ficam em `tests/`. O `conftest.py` continua na raiz de propósito: é
+ele que define `DATABASE_URL` e `BCRYPT_ROUNDS` **antes** de qualquer import da
+aplicação — `app.config` lê o ambiente no import, então um `conftest.py` dentro
+de `tests/` chegaria tarde em parte dos caminhos de coleta.
+
 Até o B1 a suíte rodava em SQLite em memória. Além de testar outro motor, isso
 obrigava o serviço a manter dois caminhos de consulta — e deixava justamente o
 caminho de produção sem cobertura. Foi assim que um `GROUP BY` inválido passou
 pelos testes e só quebrou no deploy.
 
-| Arquivo | Cobre |
+| Arquivo (em `tests/`) | Cobre |
 |---|---|
 | `test_auth`, `test_auth_security` | cadastro, login, senha errada, token inválido |
 | `test_transactions`, `test_transactions_filters` | CRUD, filtros, paginação, **isolamento entre usuários** |

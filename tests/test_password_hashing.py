@@ -122,7 +122,7 @@ def test_producao_usa_custo_12():
     import subprocess
     import sys
 
-    repo = pathlib.Path(__file__).parent.resolve()
+    repo = pathlib.Path(__file__).parent.parent.resolve()
     env = dict(os.environ)
     env.pop("BCRYPT_ROUNDS", None)
     env["PYTHONPATH"] = str(repo)
@@ -146,7 +146,7 @@ def test_custo_invalido_falha_no_boot():
     import subprocess
     import sys
 
-    repo = pathlib.Path(__file__).parent.resolve()
+    repo = pathlib.Path(__file__).parent.parent.resolve()
     env = dict(os.environ)
     env["PYTHONPATH"] = str(repo)
     env["BCRYPT_ROUNDS"] = "3"  # abaixo do mínimo aceito pelo bcrypt
