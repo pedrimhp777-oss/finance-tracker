@@ -182,6 +182,7 @@ instâncias, sem custo extra (o usuário já é carregado).
 - A troca **incrementa `token_version`** e derruba todas as sessões
 - Rate limit por **IP e por e-mail** (10 / 5 min)
 - O link nunca aparece no log em produção
+- **O token viaja no fragmento** (`https://app/#reset_token=...`), não na query: o navegador não envia o fragmento ao servidor, então o segredo não entra em log de acesso, `Referer` nem proxy. Um `GET /?reset_token=...` ficaria registrado em todo lugar por onde a requisição passasse
 
 ### Provedor de e-mail
 
