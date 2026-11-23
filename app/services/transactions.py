@@ -31,6 +31,18 @@ def resolve_timezone(timezone_name: str | None) -> ZoneInfo:
         raise ValueError("Fuso horário inválido")
 
 
+def _escape_like(term: str) -> str:
+    """Escapa os curingas do LIKE.
+
+    Sem isso, buscar por `%` casa com tudo e `_` casa com qualquer caractere:
+    não é injeção de SQL (os parâmetros são vinculados), mas a busca devolve
+    resultados que o usuário não pediu.
+    """
+    return (
+        term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    )
+
+
 def _base_query(
     db: Session,
     user_id: int,
@@ -43,7 +55,11 @@ def _base_query(
     if category:
         query = query.filter(models.Transaction.category == category)
     if search:
-        query = query.filter(models.Transaction.description.ilike(f"%{search.strip()}%"))
+        query = query.filter(
+            models.Transaction.description.ilike(
+                f"%{_escape_like(search.strip())}%", escape="\\"
+            )
+        )
     return query
 
 
@@ -128,7 +144,11 @@ def expenses_by_category(
     if category:
         query = query.filter(models.Transaction.category == category)
     if search:
-        query = query.filter(models.Transaction.description.ilike(f"%{search.strip()}%"))
+        query = query.filter(
+            models.Transaction.description.ilike(
+                f"%{_escape_like(search.strip())}%", escape="\\"
+            )
+        )
     if has_period_filter:
         query = _period_in_sql(db, query, month, year, timezone_name, day)
     rows = (
@@ -166,7 +186,9 @@ def summary_for(
             query = query.filter(models.Transaction.category == category)
         if search:
             query = query.filter(
-                models.Transaction.description.ilike(f"%{search.strip()}%")
+                models.Transaction.description.ilike(
+                    f"%{_escape_like(search.strip())}%", escape="\\"
+                )
             )
         if month is not None or year is not None or day is not None:
             query = _period_in_sql(db, query, month, year, timezone_name, day)

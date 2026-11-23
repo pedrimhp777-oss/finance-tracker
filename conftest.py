@@ -24,6 +24,9 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 # A suíte roda como desenvolvimento: o padrão do app é produção (docs fechados,
 # cookie `Secure`) e os testes de cookie dependem de HTTP puro.
 os.environ["APP_ENV"] = "development"
+# bcrypt no custo mínimo: a suíte cria centenas de usuários e o custo 12
+# gastava mais de 3 minutos só hasheando. Produção usa 12 (padrão).
+os.environ.setdefault("BCRYPT_ROUNDS", "4")
 # Chave apenas para testes locais/CI (não é segredo de produção).
 # Valor aleatório de 64 hex: precisa passar pelo validador de força que
 # rejeita placeholders como "test-only...".

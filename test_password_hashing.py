@@ -44,8 +44,12 @@ def test_hash_e_verificacao_funcionam():
 
 
 def test_formato_do_hash_e_bcrypt_2b():
+    from app import security
+
     hashed = hash_password("qualquer-senha")
-    assert hashed.startswith("$2b$12$")
+    # Custo vem do ambiente (4 na suíte, 12 em produção) — ver
+    # `test_suite_usa_custo_minimo` e `test_producao_usa_custo_12`.
+    assert hashed.startswith(f"$2b${security.BCRYPT_ROUNDS:02d}$")
     assert len(hashed) == 60  # formato bcrypt fixo
 
 
@@ -100,3 +104,60 @@ def test_hash_invalido_nao_levanta_excecao(hash_invalido):
 @pytest.mark.parametrize("senha", ["", None])
 def test_senha_vazia_falha(senha):
     assert verify_password(senha, LEGACY_PASSLIB_HASH) is False
+
+
+# --- Custo do bcrypt configurável (B7) ---
+
+def test_suite_usa_custo_minimo():
+    """O conftest reduz o custo para a suíte não gastar 3 minutos hasheando."""
+    from app import security
+
+    assert security.BCRYPT_ROUNDS == 4
+
+
+def test_producao_usa_custo_12():
+    """Sem a variável, o custo é o de produção — nunca o dos testes."""
+    import os
+    import pathlib
+    import subprocess
+    import sys
+
+    repo = pathlib.Path(__file__).parent.resolve()
+    env = dict(os.environ)
+    env.pop("BCRYPT_ROUNDS", None)
+    env["PYTHONPATH"] = str(repo)
+    env["SECRET_KEY"] = env.get("SECRET_KEY", "x" * 64)
+
+    result = subprocess.run(
+        [sys.executable, "-c", "from app import security; print(security.BCRYPT_ROUNDS)"],
+        cwd=str(repo),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr[-500:]
+    assert result.stdout.strip() == "12"
+
+
+def test_custo_invalido_falha_no_boot():
+    import os
+    import pathlib
+    import subprocess
+    import sys
+
+    repo = pathlib.Path(__file__).parent.resolve()
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(repo)
+    env["BCRYPT_ROUNDS"] = "3"  # abaixo do mínimo aceito pelo bcrypt
+
+    result = subprocess.run(
+        [sys.executable, "-c", "from app import security"],
+        cwd=str(repo),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "BCRYPT_ROUNDS" in (result.stdout + result.stderr)

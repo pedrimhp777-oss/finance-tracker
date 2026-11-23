@@ -444,3 +444,104 @@ def test_forgot_nao_agenda_envio_para_conta_inexistente(client, monkeypatch):
 
     assert res.status_code == 202
     assert agendados == []
+
+
+# --- Uso único atômico (B7) ---
+
+def test_reivindicacao_do_token_e_atomica(db):
+    """Duas tentativas com o mesmo link: só a primeira consome.
+
+    Antes havia leitura + checagem em Python + escrita; entre elas, dois
+    pedidos simultâneos passavam pela checagem e ambos trocavam a senha.
+    Agora é um `UPDATE ... WHERE used_at IS NULL`, que informa quantas linhas
+    mudou.
+    """
+    from app.routes import auth as auth_routes
+
+    user = models.User(
+        name="Atomic",
+        email="atomico@email.com",
+        hashed_password="x",
+    )
+    db.add(user)
+    db.commit()
+
+    token = "token-de-teste-atomico"
+    db.add(
+        models.PasswordResetToken(
+            user_id=user.id,
+            token_hash=auth_routes._hash_reset_token(token),
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+        )
+    )
+    db.commit()
+
+    agora = datetime.now(timezone.utc)
+    primeira = auth_routes._claim_reset_token(db, token, agora)
+    assert primeira is not None
+    db.commit()
+
+    segunda = auth_routes._claim_reset_token(db, token, agora)
+    assert segunda is None
+
+
+def test_token_expirado_nao_e_reivindicado(db):
+    from app.routes import auth as auth_routes
+
+    user = models.User(name="Exp", email="expirado@email.com", hashed_password="x")
+    db.add(user)
+    db.commit()
+    token = "token-expirado"
+    db.add(
+        models.PasswordResetToken(
+            user_id=user.id,
+            token_hash=auth_routes._hash_reset_token(token),
+            expires_at=datetime.now(timezone.utc) - timedelta(minutes=1),
+        )
+    )
+    db.commit()
+
+    assert auth_routes._claim_reset_token(db, token, datetime.now(timezone.utc)) is None
+
+
+def test_reivindicacao_e_um_update_condicional(db):
+    """A garantia contra corrida é o `WHERE used_at IS NULL` no SQL.
+
+    Um teste com threads não serve aqui: o agendamento pode serializar as duas
+    tentativas e o teste passaria mesmo com o padrão antigo (ler → checar →
+    gravar). O que elimina a janela é a escrita ser condicional, então é isso
+    que se verifica.
+    """
+    from sqlalchemy import event
+
+    from app.routes import auth as auth_routes
+
+    user = models.User(name="SQL", email="sql@email.com", hashed_password="x")
+    db.add(user)
+    db.commit()
+    token = "token-do-sql"
+    db.add(
+        models.PasswordResetToken(
+            user_id=user.id,
+            token_hash=auth_routes._hash_reset_token(token),
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+        )
+    )
+    db.commit()
+
+    emitidos: list[str] = []
+
+    def capturar(_conn, _cursor, statement, _params, _context, _executemany):
+        emitidos.append(" ".join(statement.split()))
+
+    engine = db.get_bind()
+    event.listen(engine, "before_cursor_execute", capturar)
+    try:
+        assert auth_routes._claim_reset_token(db, token, datetime.now(timezone.utc))
+    finally:
+        event.remove(engine, "before_cursor_execute", capturar)
+
+    updates = [s for s in emitidos if s.upper().startswith("UPDATE PASSWORD_RESET_TOKENS")]
+    assert updates, emitidos
+    assert "used_at IS NULL" in updates[0]
+    assert "expires_at >" in updates[0]

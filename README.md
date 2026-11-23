@@ -195,6 +195,8 @@ PASSWORD_RESET_TTL_MINUTES=30
 | Erros | `500` genérico, sem stack trace nem detalhes internos |
 | Documentação | `/docs` e `/openapi.json` fechados em produção |
 | Isolamento | toda consulta filtrada por `user_id`; acesso indevido devolve `404` (não `403`) |
+| Uso único do reset | consumido por `UPDATE ... WHERE used_at IS NULL`: duas requisições simultâneas com o mesmo link não trocam a senha duas vezes |
+| Busca | `%` e `_` digitados pelo usuário são escapados (curingas do `ILIKE`) |
 | Enumeração | login roda o bcrypt mesmo para e-mail inexistente (hash falso de mesmo custo) e `forgot-password` envia fora do caminho da resposta — o tempo não denuncia contas. `register` devolve `409` de propósito (UX > sigilo de existência) |
 | Segredos | `.env` fora do Git; nenhuma credencial no histórico |
 
@@ -290,7 +292,8 @@ descrição nem categoria.
 # Uma vez: cria o banco de teste (vazio)
 createdb finance_tracker_test
 
-python -m pytest -q          # 261 testes
+pip install -r requirements-dev.txt
+python -m pytest -q          # 269 testes
 ```
 
 A suíte roda contra um **PostgreSQL real**, o mesmo motor da produção.
@@ -323,7 +326,7 @@ pelos testes e só quebrou no deploy.
 ```bash
 python -m venv .venv
 source .venv/Scripts/activate      # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # runtime + testes
 
 cp .env.example .env               # preencha DATABASE_URL e SECRET_KEY
 alembic upgrade head
@@ -340,6 +343,7 @@ uvicorn app.main:app --reload      # http://localhost:8000/docs
 | `APP_ENV` | — | padrão **`production`** (fail closed: fecha `/docs` e `/openapi.json`); `development` abre |
 | `TRUST_PROXY_HEADERS` | recomendada na Render | confia em `CF-Connecting-IP`/`X-Forwarded-For` para obter o IP real; padrão `false` |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | — | padrão `30` |
+| `BCRYPT_ROUNDS` | — | custo do bcrypt: padrão `12`; a suíte usa `4` para não gastar minutos hasheando |
 | `EMAIL_FROM`, `BREVO_API_KEY` | para e-mail | recuperação de senha |
 | `PASSWORD_RESET_URL` | para e-mail | base do link enviado |
 | `SENTRY_DSN` | — | monitoramento (opcional) |
@@ -350,7 +354,7 @@ uvicorn app.main:app --reload      # http://localhost:8000/docs
 
 ```bash
 # Render
-Build:  pip install -r requirements.txt
+Build:  pip install -r requirements.txt   # só runtime
 Start:  alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
 ```
 

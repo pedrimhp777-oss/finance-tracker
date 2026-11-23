@@ -696,3 +696,28 @@ def test_export_excel_with_filters(client):
 def test_export_excel_unauthorized(client):
     res = client.get("/transactions/export/excel")
     assert res.status_code == 401
+
+
+# --- Busca: curingas do LIKE são texto (B7) ---
+
+def test_busca_trata_porcento_como_texto(client):
+    """Buscar `%` não pode devolver tudo — antes o `%` virava curinga."""
+    headers = get_auth_headers(client, "curinga@email.com")
+    _create(client, headers, description="Desconto 50%", amount="10.00")
+    _create(client, headers, description="Mercado", amount="20.00")
+
+    res = client.get("/transactions/", params={"search": "%"}, headers=headers)
+
+    assert res.status_code == 200
+    assert [t["description"] for t in res.json()] == ["Desconto 50%"]
+
+
+def test_busca_trata_underline_como_texto(client):
+    """`_` casaria com qualquer caractere se não fosse escapado."""
+    headers = get_auth_headers(client, "sublinhado@email.com")
+    _create(client, headers, description="conta_a_pagar", amount="10.00")
+    _create(client, headers, description="contaXaXpagar", amount="20.00")
+
+    res = client.get("/transactions/", params={"search": "conta_a_pagar"}, headers=headers)
+
+    assert [t["description"] for t in res.json()] == ["conta_a_pagar"]
