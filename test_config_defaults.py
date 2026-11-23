@@ -30,7 +30,7 @@ def test_sem_app_env_o_padrao_e_producao(tmp_path):
     """Fail closed: sem configuração explícita, o app não abre /docs.
 
     Antes o padrão era `development`, então um deploy que esquecesse APP_ENV
-    expunha a documentação interativa e emitia cookie sem `Secure`.
+    expunha a documentação interativa e desligava o modo restrito de produção.
     O teste roda fora do repositório para não herdar o `.env` local.
     """
     result = _run(

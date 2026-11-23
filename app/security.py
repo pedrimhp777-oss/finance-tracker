@@ -6,16 +6,13 @@ from datetime import datetime, timedelta, timezone
 
 from typing import Any
 
-import hmac
 import bcrypt
 import jwt
 from jwt import InvalidTokenError
 from dotenv import load_dotenv
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
-
-from app import config
 
 from app import models
 from app.database import get_db
@@ -112,37 +109,9 @@ DUMMY_PASSWORD_HASH = (
     "$2b$12$S7ikU2xd9RTPgFsJHbFwU.F5WefRbJJTNi54I3p3FadK3BqGOfYdy"
 )
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
-# Variante que não falha sozinha: permite cair para o cookie de sessão.
-oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
-
-# Métodos que não alteram estado — não exigem token CSRF.
-SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
-
-
-def enforce_csrf(request: Request) -> None:
-    """Valida o double-submit de CSRF para requisições autenticadas por cookie.
-
-    Só é chamado quando a autenticação veio do cookie (o header `Authorization`
-    já imuniza contra CSRF, pois um site terceiro não consegue defini-lo em
-    formulários). O token CSRF vive em cookie legível por JS e precisa ser
-    ecoado no header `X-CSRF-Token`.
-    """
-    if request.method in SAFE_METHODS:
-        return
-    cookie_token = request.cookies.get(config.CSRF_COOKIE_NAME) or ""
-    header_token = request.headers.get(config.CSRF_HEADER_NAME) or ""
-    if not cookie_token or not header_token:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Requisição bloqueada: token CSRF ausente.",
-        )
-    if not hmac.compare_digest(cookie_token, header_token):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Requisição bloqueada: token CSRF inválido.",
-        )
-
+# Único modo de sessão. `auto_error=False`: a ausência do header vira o mesmo
+# 401 de token inválido, sem revelar qual credencial faltou.
+bearer_scheme = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
 
 # --- Rate limiting simples em memória para rotas de autenticação ---
 # Suficiente para uma instância única (Render free/single). Se a aplicação
@@ -273,14 +242,14 @@ def create_access_token(data: dict) -> str:
 
 
 def get_current_user(
-    request: Request,
-    bearer_token: str | None = Depends(oauth2_scheme_optional),
+    bearer_token: str | None = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> models.User:
-    """Autentica via header `Authorization: Bearer` ou cookie `HttpOnly`.
+    """Autentica pelo header `Authorization: Bearer`.
 
-    O header tem precedência. Quando a autenticação vem do cookie, aplica-se
-    a verificação de CSRF nos métodos que alteram estado.
+    Só este modo existe: a sessão via cookie foi removida porque exigiria
+    frontend e API no mesmo domínio registrável, e sem isso o navegador
+    descarta o cookie (third-party). Ver README, seção Autenticação.
     """
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -288,14 +257,9 @@ def get_current_user(
         headers={"WWW-Authenticate": "Bearer"},
     )
 
-    if bearer_token:
-        token = bearer_token
-        authenticated_via_cookie = False
-    else:
-        token = request.cookies.get(config.AUTH_COOKIE_NAME) or ""
-        authenticated_via_cookie = True
-        if not token:
-            raise credentials_exception
+    if not bearer_token:
+        raise credentials_exception
+    token = bearer_token
 
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
@@ -317,8 +281,5 @@ def get_current_user(
         raise credentials_exception
     if token_version != (user.token_version or 0):
         raise credentials_exception
-
-    if authenticated_via_cookie:
-        enforce_csrf(request)
 
     return user
