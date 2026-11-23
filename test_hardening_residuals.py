@@ -13,6 +13,7 @@ import subprocess
 import sys
 
 import pytest
+from conftest import TEST_DATABASE_URL
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -117,7 +118,7 @@ def _run_app_under_env(env_overrides: dict) -> subprocess.CompletedProcess:
 
 @pytest.mark.parametrize("app_env", ["production", "prod", "staging"])
 def test_docs_and_openapi_closed_outside_dev(app_env):
-    result = _run_app_under_env({"APP_ENV": app_env, "DATABASE_URL": "sqlite:///:memory:"})
+    result = _run_app_under_env({"APP_ENV": app_env, "DATABASE_URL": TEST_DATABASE_URL})
     assert result.returncode == 0, result.stderr[-800:]
     output = result.stdout
     assert "/openapi.json 404" in output, output
@@ -126,7 +127,7 @@ def test_docs_and_openapi_closed_outside_dev(app_env):
 
 @pytest.mark.parametrize("app_env", ["development", "dev", "local", "test"])
 def test_docs_and_openapi_available_in_dev(app_env):
-    result = _run_app_under_env({"APP_ENV": app_env, "DATABASE_URL": "sqlite:///:memory:"})
+    result = _run_app_under_env({"APP_ENV": app_env, "DATABASE_URL": TEST_DATABASE_URL})
     assert result.returncode == 0, result.stderr[-800:]
     output = result.stdout
     assert "/openapi.json 200" in output, output

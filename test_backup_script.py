@@ -1,7 +1,7 @@
 """Testes do utilitário de backup lógico (scripts/backup.py).
 
 O script é a única defesa contra perder a conta do provedor do banco, então
-precisa de teste: aqui ele é exercitado contra SQLite em memória — nunca
+precisa de teste: aqui ele é exercitado contra o PostgreSQL de teste, em schema isolado — nunca
 contra o banco real.
 
 O que se verifica:
@@ -21,6 +21,8 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import create_engine, text
 
+from conftest import TEST_DATABASE_URL
+
 REPO_ROOT = pathlib.Path(__file__).parent.resolve()
 _SPEC = importlib.util.spec_from_file_location(
     "backup_script", REPO_ROOT / "scripts" / "backup.py"
@@ -29,20 +31,46 @@ backup = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(backup)
 
 
-def _engine_with_data():
-    """SQLite em memória com users, transactions e alembic_version."""
-    engine = create_engine("sqlite:///:memory:")
+BACKUP_SCHEMA = "backup_test"
+
+
+@pytest.fixture
+def pg_engine():
+    """Engine Postgres isolada em um schema próprio.
+
+    As tabelas do backup não podem colidir com as da suíte principal, que usa o
+    mesmo banco de teste; o `search_path` limita o inspector a este schema.
+    """
+    admin = create_engine(TEST_DATABASE_URL)
+    with admin.begin() as conn:
+        conn.execute(text(f"DROP SCHEMA IF EXISTS {BACKUP_SCHEMA} CASCADE"))
+        conn.execute(text(f"CREATE SCHEMA {BACKUP_SCHEMA}"))
+    engine = create_engine(
+        TEST_DATABASE_URL,
+        connect_args={"options": f"-csearch_path={BACKUP_SCHEMA}"},
+    )
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+        with admin.begin() as conn:
+            conn.execute(text(f"DROP SCHEMA IF EXISTS {BACKUP_SCHEMA} CASCADE"))
+        admin.dispose()
+
+
+def _engine_with_data(engine):
+    """users, transactions e alembic_version no schema isolado."""
     with engine.begin() as conn:
         conn.execute(
             text(
                 "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT, "
-                "hashed_password TEXT, token_version INTEGER, created_at DATETIME)"
+                "hashed_password TEXT, token_version INTEGER, created_at TIMESTAMP)"
             )
         )
         conn.execute(
             text(
                 "CREATE TABLE transactions (id INTEGER PRIMARY KEY, description TEXT, "
-                "amount NUMERIC, type TEXT, category TEXT, date DATETIME, user_id INTEGER)"
+                "amount NUMERIC, type TEXT, category TEXT, date TIMESTAMP, user_id INTEGER)"
             )
         )
         conn.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32))"))
@@ -62,8 +90,8 @@ def _engine_with_data():
     return engine
 
 
-def test_dump_gera_arquivo_com_contagens(tmp_path):
-    path = backup._dump(_engine_with_data(), tmp_path)
+def test_dump_gera_arquivo_com_contagens(tmp_path, pg_engine):
+    path = backup._dump(_engine_with_data(pg_engine), tmp_path)
 
     assert path.exists()
     with gzip.open(path, "rt", encoding="utf-8") as fh:
@@ -81,8 +109,8 @@ def test_decimal_vira_string_para_preservar_centavos():
     assert isinstance(backup._jsonable(Decimal("30005501.00")), str)
 
 
-def test_dump_preserva_hash_e_datas(tmp_path):
-    path = backup._dump(_engine_with_data(), tmp_path)
+def test_dump_preserva_hash_e_datas(tmp_path, pg_engine):
+    path = backup._dump(_engine_with_data(pg_engine), tmp_path)
     with gzip.open(path, "rt", encoding="utf-8") as fh:
         doc = json.load(fh)
 
@@ -90,8 +118,7 @@ def test_dump_preserva_hash_e_datas(tmp_path):
     assert user["hashed_password"].startswith("$2b$")
     # Sem o hash o backup não restaura login — é o dado mais crítico.
     assert len(user["hashed_password"]) > 20
-    # A data existe e é legível (no SQLite vem como texto; no PostgreSQL vem
-    # como datetime e passa por _jsonable -> ISO 8601).
+    # A data existe e é legível (datetime -> ISO 8601 via _jsonable).
     assert "2026-11-15" in str(doc["tables"]["transactions"][0]["date"])
 
 
@@ -107,15 +134,15 @@ def test_bytes_viram_base64():
     assert backup._jsonable(b"\x00\x01") == {"__base64__": "AAE="}
 
 
-def test_verify_aprova_backup_integro(tmp_path, capsys):
-    path = backup._dump(_engine_with_data(), tmp_path)
+def test_verify_aprova_backup_integro(tmp_path, capsys, pg_engine):
+    path = backup._dump(_engine_with_data(pg_engine), tmp_path)
     assert backup._verify(path) == 0
     assert "[OK]" in capsys.readouterr().out
 
 
-def test_verify_reprova_contagem_divergente(tmp_path, capsys):
+def test_verify_reprova_contagem_divergente(tmp_path, capsys, pg_engine):
     """Se o arquivo foi truncado, a meta deixa de bater com o conteúdo."""
-    path = backup._dump(_engine_with_data(), tmp_path)
+    path = backup._dump(_engine_with_data(pg_engine), tmp_path)
 
     with gzip.open(path, "rt", encoding="utf-8") as fh:
         doc = json.load(fh)
@@ -132,12 +159,11 @@ def test_verify_reprova_arquivo_inexistente(tmp_path):
     assert backup._verify(tmp_path / "nao-existe.json.gz") == 2
 
 
-def test_tabela_ausente_e_registrada_como_menos_um(tmp_path):
+def test_tabela_ausente_e_registrada_como_menos_um(tmp_path, pg_engine):
     """Banco antigo sem alembic_version não deve quebrar o dump."""
-    engine = create_engine("sqlite:///:memory:")
-    with engine.begin() as conn:
+    with pg_engine.begin() as conn:
         conn.execute(text("CREATE TABLE users (id INTEGER PRIMARY KEY)"))
-    path = backup._dump(engine, tmp_path)
+    path = backup._dump(pg_engine, tmp_path)
     with gzip.open(path, "rt", encoding="utf-8") as fh:
         doc = json.load(fh)
     assert doc["meta"]["row_counts"]["alembic_version"] == -1
